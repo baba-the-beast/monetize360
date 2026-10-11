@@ -100,26 +100,32 @@ def _row(event: AuditEvent, seq: int) -> dict[str, Any]:
             "signal_sources": plain(event.signal_sources), "output": plain(event.output)}
 
 
-def append(db: Database, event: AuditEvent) -> tuple[int, bytes] | None:
-    """Append to the event's chain. Returns (seq, hash), or None when this price_id is already recorded."""
-    with db.tenant(event.tenant_id) as conn:
-        conn.execute(_LOCK, (f"{event.tenant_id}:{event.domain}",))
-        if conn.execute("SELECT 1 FROM audit_log WHERE price_id = %s", (event.price_id,)).fetchone():
-            return None
-        tail = conn.execute(
-            "SELECT seq, hash FROM audit_log WHERE tenant_id = %s AND domain = %s ORDER BY seq DESC LIMIT 1",
-            (event.tenant_id, event.domain)).fetchone()
-        seq, prev = (tail["seq"] + 1, bytes(tail["hash"])) if tail else (1, GENESIS)
-        row = _row(event, seq)
-        digest = chain_hash(prev, row)
-        conn.execute(
-            "INSERT INTO audit_log (price_id, tenant_id, domain, seq, pack_version, entity, key_id, as_of, inputs, "
-            "signal_sources, reference_price, output, prev_hash, hash) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (row["price_id"], row["tenant_id"], row["domain"], seq, row["pack_version"], row["entity"],
-             row["key_id"], row["as_of"], Jsonb(row["inputs"]), Jsonb(row["signal_sources"]),
-             row["reference_price"], Jsonb(row["output"]), prev, digest))
+def append_in(conn: psycopg.Connection, event: AuditEvent) -> tuple[int, bytes] | None:
+    """Append to the event's chain inside the caller's tenant transaction (so the row commits together with
+    whatever else that transaction writes). Returns (seq, hash), or None when this price_id is already recorded."""
+    conn.execute(_LOCK, (f"{event.tenant_id}:{event.domain}",))
+    if conn.execute("SELECT 1 FROM audit_log WHERE price_id = %s", (event.price_id,)).fetchone():
+        return None
+    tail = conn.execute(
+        "SELECT seq, hash FROM audit_log WHERE tenant_id = %s AND domain = %s ORDER BY seq DESC LIMIT 1",
+        (event.tenant_id, event.domain)).fetchone()
+    seq, prev = (tail["seq"] + 1, bytes(tail["hash"])) if tail else (1, GENESIS)
+    row = _row(event, seq)
+    digest = chain_hash(prev, row)
+    conn.execute(
+        "INSERT INTO audit_log (price_id, tenant_id, domain, seq, pack_version, entity, key_id, as_of, inputs, "
+        "signal_sources, reference_price, output, prev_hash, hash) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["price_id"], row["tenant_id"], row["domain"], seq, row["pack_version"], row["entity"],
+         row["key_id"], row["as_of"], Jsonb(row["inputs"]), Jsonb(row["signal_sources"]),
+         row["reference_price"], Jsonb(row["output"]), prev, digest))
     return seq, digest
+
+
+def append(db: Database, event: AuditEvent) -> tuple[int, bytes] | None:
+    """Append to the event's chain in its own transaction."""
+    with db.tenant(event.tenant_id) as conn:
+        return append_in(conn, event)
 
 
 def get(db: Database, tenant_id: str, price_id: str) -> dict[str, Any] | None:
@@ -175,16 +181,31 @@ class AuditLog:
         self._down_until = 0.0
         self._stop = threading.Event()
 
+    @property
+    def db(self) -> Database:
+        return self._db
+
+    def available(self) -> bool:
+        """False for a few seconds after a failure, so every request doesn't wait on a database that is down."""
+        return self._monotonic() >= self._down_until
+
+    def mark_down(self, error: Exception) -> None:
+        self._down_until = self._monotonic() + self.RETRY_AFTER
+        log.error("database unreachable, degraded for %.0f s (%s)", self.RETRY_AFTER, type(error).__name__)
+
+    def spool(self, event: AuditEvent) -> None:
+        """Keep a record on local disk until Postgres is back."""
+        self._write_spool([event])
+
     def record(self, event: AuditEvent) -> bool:
         """True when the row is in Postgres now; False when it was spooled and will be appended later."""
-        if self._monotonic() >= self._down_until:
+        if self.available():
             try:
                 append(self._db, event)
                 return True
-            except psycopg.Error as e:
-                self._down_until = self._monotonic() + self.RETRY_AFTER
-                log.error("audit: database unreachable, spooling (%s)", type(e).__name__)
-        self._write_spool([event])
+            except (psycopg.OperationalError, psycopg.InterfaceError) as e:      # unreachable, not a query bug
+                self.mark_down(e)
+        self.spool(event)
         return False
 
     def pending(self) -> int:

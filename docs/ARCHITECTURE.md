@@ -73,11 +73,11 @@ Company backend ──(API key)──► pricing-api ──► price + waterfall
 ┌───────────────────────────────┐      ┌───────────────────────────────┐
 │ REDIS  (free, open source)    │      │ POSTGRES 16  (free)           │
 │  signals:{tenant}:{domain}:*  │      │  tenants, api_keys (hashes)   │
-│  anchor:{tenant}:{domain}:{e} │      │  packs (immutable versions)   │
-│  last:{tenant}:{domain}:{e}   │
-│  idem:{tenant}:{key}  (24 h)  │
-│  ratelimit:{key_id}           │      │  pack_pointer (what is live)  │
-│  stream audit:{shard}         │      │  tenant_policy                │
+│  pub/sub: key revoked,        │      │  packs (immutable versions)   │
+│   pack published, kill switch │
+│  (nothing is stored only here)│
+│                               │      │  pack_pointer (what is live)  │
+│                               │      │  tenant_policy, price_state,  │
 │  pubsub: pack_published,      │      │  audit_log (append-only,      │
 │          key_revoked, kill    │      │   hash-chained, partitioned)  │
 └──────────────┬────────────────┘      └───────────────▲───────────────┘
@@ -351,7 +351,7 @@ lambdas, comprehensions, `**`, walrus, Python's `and/or/not/is/if` — is reject
 | 1 | Auth | key → tenant, domains, role (memory cache) |
 | 2 | Idempotency | `idem:{tenant}:{key}` hit → return the stored response (same `price_id`, no new audit row) |
 | 3 | Rate limit | Redis token bucket per key and tenant |
-| 4 | Load pack | `(tenant, domain)` → compiled bundle in RAM. Kill mode `freeze` → return `last:` price and stop here |
+| 4 | Load pack | `(tenant, domain)` → compiled bundle in RAM. Kill mode `freeze` → return the last price (`price_state.last_price`) and stop here |
 | 5 | Resolve signals | request → Redis (check staleness) → public → default. Validate type/range. Record source of each |
 | 6 | Base | `from_request`, `band`, `lookup_table`, `cost_plus`, `competitor_rel` … |
 | 7 | Adjust | groups in order; fired rules by priority, then file order; combine per stacking policy. Volume tiers and promos are ordinary rules (`tier`, `pct`) in a group — no separate stage. Kill mode `base_only` → every rule disabled |
@@ -368,6 +368,27 @@ The engine's own stages are exactly ENGINE_SPEC's: **base → adjust → guard �
 **What "the same thing" means for `max_change`.** The anchor is kept per `entity`. Callers put anything that must be kept apart into the entity string — for hotels the stay date: `deluxe-101@2026-11-08`. Otherwise two different nights of one room would limit each other. (API.md states this convention; no extra field is needed.)
 
 **Idempotency.** `idempotency_key` is optional; results are kept 24 h. Same key + same body → the stored response. Same key + different body → `409 idempotency_conflict`.
+
+**One transaction per price (as built).** A real `/price` is a single Postgres transaction:
+
+```
+lock the idempotency key  → already used?  same body: return the stored response · other body: 409
+lock the entity           → read its anchor → reference_price
+evaluate (engine)         → an engine error rolls everything back: nothing is recorded, nothing moves
+append the audit row      → the (tenant, domain) hash chain
+save the anchor / last price, store the idempotent response
+COMMIT
+```
+
+So the audit row, the anchor and the idempotency record can never disagree: a crash leaves all three or none.
+Locks are always taken in that order (key → entity → chain), so two requests can't deadlock. Ten identical
+requests at once produce one price; sixty requests for one room from two servers all see the same anchor
+(both tested). Measured: about 7 ms per price, the same as with the audit row alone.
+
+These live in Postgres, not Redis, on purpose: a lost anchor would silently switch the `max_change` guard off,
+and a lost idempotency key would price a retry twice. If Postgres is unreachable the price is still returned
+without them, and the response says so: `max_change not enforced: database unreachable`,
+`idempotency_key not honoured: database unreachable`, `audit deferred: ...`.
 
 ---
 
@@ -450,7 +471,7 @@ Target: 15+ golden cases per domain during the event (covering each operator, ea
 **`formula` bounds** can't be proven by a static check (CEL arithmetic can be anything). `/verify` fuzzes it, and the guard interval clamps it at runtime anyway.
 
 **Kill switch** (`POST /v1/admin/kill`, admin role): instantly, via Redis pub/sub, a domain switches to
-- `freeze` — return the last issued price per entity (`last:` key in Redis; `503 killed` if there is none), or
+- `freeze` — return the last issued price per entity (`price_state.last_price` in Postgres; `503 killed` if there is none), or
 - `base_only` — return base price with guards only.
 
 Use case: "something looks wrong at 2 AM" → one call, every replica obeys in under a second, investigate calmly.
@@ -676,8 +697,8 @@ audit_log      (price_id, tenant_id, domain, seq, pack_version, entity, as_of,
                 prev_hash, hash, created_at)               PARTITION BY RANGE (created_at)
 ```
 
-Exact DDL, grants and RLS policies: `deploy/postgres/init/002_schema.sql`. Idempotency results, anchors and
-last prices live only in Redis.
+Exact DDL, grants and RLS policies: `deploy/postgres/init/002_schema.sql`. Idempotency results (`idempotency_keys`), anchors and
+last prices (`price_state`) live in Postgres, tenant-isolated by the same RLS policy.
 
 - Row-Level Security on every table by `tenant_id`.
 - The app's DB user has **no UPDATE/DELETE** on `audit_log` or published `packs`.

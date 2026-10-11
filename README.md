@@ -41,8 +41,8 @@ curl -X POST http://localhost:8000/v1/simulate/hotel -H "Content-Type: applicati
 returns 401 — the API is closed by default. With it, every caller is that tenant and its packs are the files in
 `packs/templates/`. Never set it in production.
 
-Not enforced until the shared store exists (the response says so in `flags`): the `max_change` anchor and
-`idempotency_key`. Not built yet: audit rows, tenant policy, Redis-fed signals.
+In this no-database mode nothing is recorded: no audit row, no `max_change` anchor, no idempotency. Every response
+says so in `flags`.
 
 ## Run with API keys and Postgres, no Docker (M4)
 
@@ -66,7 +66,7 @@ pytest -m integration                     # against the real database (recreates
 
 With `DATABASE_URL` set, the tenant comes only from the API key and `DEV_TENANT` is ignored. If Postgres goes
 down, keys this replica has already seen keep pricing; unseen keys get 503 `auth_unavailable`.
-Not yet: shared rate limits and instant cross-replica revocation (Redis, M5) — until then a revoked key can
+Not yet: shared rate limits and instant cross-replica revocation (Redis broadcasts) — until then a revoked key can
 live up to 60 s on other replicas and the rate limit is per replica.
 
 ### Audit, replay and tamper detection (M6)
@@ -85,6 +85,17 @@ Tamper demo: as the database owner run
 `/v1/audit/verify` — it reports that row. (The application's own account gets `permission denied`.)
 If Postgres is unreachable prices are still returned; their records wait in `.audit-spool/` and are appended
 when it is back.
+
+### The max_change guard and idempotency
+
+Both are enforced in the same Postgres transaction as the audit row.
+
+- **max_change** — hotel allows 15% per hour. Price a room at 3000, then again with `occupancy: 0.9`
+  (rules say 3600): you get **3450**, and you keep getting 3450 for the rest of the hour however often you ask.
+  An hour later the last price starts the next window.
+- **Idempotency** — send `"idempotency_key": "booking-77"`. A retry returns the first response (same
+  `price_id`, no second audit row); the same key with a different body is `409 idempotency_conflict`.
+  Keys last 24 hours, per tenant and domain.
 
 ## Golden rule
 

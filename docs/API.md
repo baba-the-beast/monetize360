@@ -61,6 +61,10 @@ Base URL (demo): `http://localhost:8080` · Interactive docs: `/docs` · All bod
 - Public signals (`is_weekend`, `festival`) are computed; sending them → 422.
 - Same `idempotency_key` within 24 h → same response, same `price_id`, no new audit row.
   Same key with a different body → 409 `idempotency_conflict`.
+  Keys are per tenant and per domain. A request that fails (4xx) does not use up its key.
+- If the database is unreachable the price is still returned; `flags` then lists what could not be done:
+  `max_change not enforced: database unreachable`, `idempotency_key not honoured: database unreachable`,
+  `audit deferred: database unreachable, record spooled`.
 
 **200**
 ```json

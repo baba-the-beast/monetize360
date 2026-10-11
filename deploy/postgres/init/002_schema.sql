@@ -8,8 +8,8 @@ CREATE TABLE tenants (
 
 CREATE TABLE tenant_policy (
     tenant_id           text PRIMARY KEY REFERENCES tenants(id),
-    min_price           numeric(14,2),
-    max_price           numeric(14,2),
+    min_price           numeric(16,2),
+    max_price           numeric(16,2),
     max_surge_x         numeric(6,2),
     banned_signals      text[] NOT NULL DEFAULT '{}',
     require_two_person  boolean NOT NULL DEFAULT true,
@@ -66,7 +66,7 @@ CREATE TABLE audit_log (
     as_of            timestamptz NOT NULL,
     inputs           jsonb NOT NULL,
     signal_sources   jsonb NOT NULL,
-    reference_price  numeric(14,2),                       -- max_change window anchor (ENGINE_SPEC §6.2)
+    reference_price  numeric(16,2),                       -- max_change window anchor (ENGINE_SPEC §6.2)
     output           jsonb NOT NULL,
     prev_hash        bytea NOT NULL,
     hash             bytea NOT NULL,
@@ -82,6 +82,31 @@ CREATE TABLE audit_log_default PARTITION OF audit_log DEFAULT;
 
 CREATE INDEX audit_chain_idx ON audit_log (tenant_id, domain, seq);
 
+-- What the max_change guard compares against, per priced thing (ENGINE_SPEC 6.2). In Postgres, not Redis:
+-- losing an anchor would silently switch the guard off.
+CREATE TABLE price_state (
+    tenant_id     text NOT NULL REFERENCES tenants(id),
+    domain        text NOT NULL,
+    entity        text NOT NULL,
+    anchor_price  numeric(16,2) NOT NULL,                 -- the price at the start of the current window
+    anchor_time   timestamptz NOT NULL,
+    last_price    numeric(16,2) NOT NULL,                 -- the most recent price (also the kill switch's "freeze")
+    last_time     timestamptz NOT NULL,
+    PRIMARY KEY (tenant_id, domain, entity)
+);
+
+-- A retried request with the same idempotency_key gets the stored response instead of a second price.
+CREATE TABLE idempotency_keys (
+    tenant_id     text NOT NULL REFERENCES tenants(id),
+    domain        text NOT NULL,
+    key           text NOT NULL,
+    request_hash  bytea NOT NULL,                          -- same key + another body = 409
+    response      jsonb NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, domain, key)
+);
+CREATE INDEX idempotency_age_idx ON idempotency_keys (tenant_id, created_at);
+
 -- ---------- permissions: app role can never rewrite history ----------
 GRANT SELECT ON tenants TO m360_app;                           -- tenants are created by the operator (owner role)
 GRANT SELECT, INSERT, UPDATE ON tenant_policy, pack_pointer TO m360_app;
@@ -89,13 +114,16 @@ GRANT SELECT, INSERT ON api_keys TO m360_app;
 GRANT UPDATE (revoked_at) ON api_keys TO m360_app;            -- create and revoke; never rewrite secret, role or scope
 GRANT SELECT, INSERT, UPDATE (status, approver, compiled, lint_report, verify_report) ON packs TO m360_app;
 GRANT SELECT, INSERT ON audit_log TO m360_app;                -- no UPDATE, no DELETE
+GRANT SELECT, INSERT, UPDATE ON price_state TO m360_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON idempotency_keys TO m360_app;   -- DELETE: expire after 24 h
 
 -- ---------- Row-Level Security: second line of tenant isolation ----------
 -- The app runs  SET LOCAL app.tenant_id = '<tenant from API key>'  in every transaction.
 DO $$
 DECLARE t text;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['tenant_policy', 'api_keys', 'packs', 'pack_pointer', 'audit_log'] LOOP
+    FOREACH t IN ARRAY ARRAY['tenant_policy', 'api_keys', 'packs', 'pack_pointer', 'audit_log', 'price_state',
+                             'idempotency_keys'] LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format(
             'CREATE POLICY tenant_isolation ON %I USING (tenant_id = current_setting(''app.tenant_id'', true))',

@@ -50,7 +50,7 @@ api ──► control ──► engine ◄── workers
 | Validation | **Pydantic v2** | 2.8 | Typed models, rejects bad input at the edge, `Decimal` support | marshmallow | MIT |
 | Money math | **`decimal`** (stdlib) | — | Exact arithmetic, explicit rounding modes | `float` (0.1 + 0.2 ≠ 0.3) | — |
 | Pack files | **PyYAML** + **jsonschema** | 6.0 / 4.23 | YAML readable by business users; JSON Schema gives validation + VS Code autocomplete | JSON packs (less readable), TOML | MIT |
-| Rule expressions | **CEL syntax, in-house evaluator** (`engine/expr.py`, stdlib `ast`) | — | Exact `Decimal`, compiled once, whitelisted nodes only; ~50 µs per hotel price (ARCHITECTURE §6, ENGINE_SPEC §5.4) | cel-python (floats, ~300 µs/condition — measured), `eval` (unsafe) | — |
+| Rule expressions | **CEL syntax, in-house evaluator** (`engine/expr.py`, stdlib `ast`) | — | Exact `Decimal`, compiled once, whitelisted `ast` nodes only — no eval/exec, no calls, no attribute access (attack tests: `tests/unit/test_expr.py`); ~50 µs per hotel price (ARCHITECTURE §6, ENGINE_SPEC §5.4) | cel-python (floats, ~300 µs/condition — measured), `eval` (unsafe) | — |
 | Database | **PostgreSQL** | 16 | Row-Level Security, partitioning, JSONB, battle-tested | MongoDB (no RLS, weaker audit guarantees), SQLite (single writer, no RLS) | PostgreSQL |
 | DB driver | **psycopg 3** (+ pool) | 3.2 | Fast, parameterized queries only, no ORM magic | SQLAlchemy ORM (extra layer we don't need) | LGPL-3.0 |
 | Cache / queue / events | **Redis** | 7 | One tool for signals (TTL), rate limits, audit stream, pub/sub | Kafka (heavy), RabbitMQ (second tool) | free to self-host¹ |

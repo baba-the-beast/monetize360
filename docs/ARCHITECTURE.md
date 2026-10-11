@@ -335,6 +335,13 @@ Rules need conditions like `occupancy > 0.8 && is_weekend`. These are written by
 evaluator over Python's `ast` (`engine/expr.py`): exact `Decimal` math, compiled once, no `eval`, no calls,
 no attribute access. Measured: ~50 µs for a full hotel price, ~3.4 ms for a 500-rule pack (ENGINE_SPEC §5.4).
 
+How it stays safe: `ast.parse` only builds a syntax tree — nothing is executed. The evaluator accepts just
+these node types: literals, declared signal names, `[..]` lists, `! - +`, `&& ||`, `+ - * /`, and
+comparisons including `in`. Everything else — function calls, attribute access (`x.__class__`), subscripts,
+lambdas, comprehensions, `**`, walrus, Python's `and/or/not/is/if` — is rejected when the pack is compiled.
+`tests/unit/test_expr.py` proves it with 35+ attack strings, including `__import__('os').system(...)` and
+`x.__class__.__mro__[1].__subclasses__()`.
+
 ---
 
 ## 7. The evaluation pipeline

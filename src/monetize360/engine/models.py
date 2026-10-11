@@ -181,6 +181,7 @@ class Rounding:
     step: Decimal
     mode: str                                   # half_up | down | up
     ending: int | None = None
+    grid: tuple[int, int] | None = None         # (first valid price, spacing) in cents; set by compile_pack
 
 
 @dataclass(frozen=True)

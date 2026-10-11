@@ -507,7 +507,7 @@
           "enum": ["half_up", "down", "up"]
         },
         "ending": {
-          "description": "Force the last two digits, e.g. 99 -> 6199. Applied after step rounding, then re-checked against guards.",
+          "description": "Force the last two digits, e.g. 99 -> 6199. The price goes to the nearest multiple of step that ends in it (per mode), inside the guards. Needs ending % gcd(step, 100) == 0.",
           "type": "integer",
           "minimum": 0,
           "maximum": 99

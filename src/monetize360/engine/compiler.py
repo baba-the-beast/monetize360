@@ -379,9 +379,10 @@ class _Compiler:
             self.bad("rounding/step", "step must be a positive multiple of 0.01")
             return Rounding(Decimal(1), r["mode"], None)
         rounding = Rounding(step, r["mode"], ending)
-        if ending is not None and grid(rounding) is None:
+        g = grid(rounding)
+        if g is None:
             # a multiple of `step` can end in `ending` only if ending % gcd(step, 100) == 0 (whole cents):
             # step 50 + ending 99 never; step 30 + ending 90 yes (390); step 500 + ending 0 yes
             self.bad("rounding/ending", f"ending {ending:02d} is unreachable with step {step}: "
                                         f"no multiple of {step} ends in {ending:02d}")
-        return rounding
+        return Rounding(step, r["mode"], ending, g)

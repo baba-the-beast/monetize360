@@ -15,25 +15,34 @@ from monetize360.control.schema import validate
 from monetize360.engine import PackInvalid, Policy, compile_pack
 
 # A price must never depend on who someone IS. Words are matched against whole snake_case segments of a signal
-# name. Words that are always about a person block anywhere (`customer_religion`, `religion_group`). Words with an
-# innocent meaning too block only alone or next to a person word: `customer_age` blocks, `vehicle_age`,
-# `stock_age_days`, `race_day`, `battery_health`, `mobile_app`, `phone_model` don't (review L1).
+# name. Words that are always about a person block anywhere (`customer_religion`, `religion_group`).
 PROTECTED = ("religion", "religious", "caste", "ethnicity", "ethnic", "tribe", "tribal", "gender",
              "sexual_orientation", "pregnancy", "pregnant", "marital_status", "nationality", "disability",
              "skin_colour", "skin_color", "political_party")
-PROTECTED_IF_ABOUT_A_PERSON = ("age", "sex", "race", "health", "disabled")
 # Identifies a person: a price set with it is "personalised pricing" (e.g. New York's disclosure law).
 PERSONAL = ("email", "aadhaar", "pan_number", "passport", "ssn", "ip_address", "user_id", "customer_id",
             "device_id", "full_name", "first_name", "last_name", "date_of_birth", "dob", "phone_number",
             "mobile_number")
-PERSONAL_IF_ABOUT_A_PERSON = ("phone", "mobile", "address")
+# Words with an innocent meaning too. SAFE DEFAULT: they block (`age_group`, `child_age`, `health_condition`,
+# `home_address`, `contact_phone`) unless the name says what THING they describe and names no person
+# (`vehicle_age`, `stock_age_days`, `race_day`, `battery_health`, `phone_model`, `mobile_app`).
+AMBIGUOUS_PROTECTED = ("age", "sex", "race", "health", "disabled")
+AMBIGUOUS_PERSONAL = ("phone", "mobile", "address")
 PERSON = ("customer", "user", "guest", "buyer", "passenger", "rider", "driver", "traveller", "traveler", "member",
-          "patient", "person", "client", "shopper", "visitor", "student", "employee", "applicant", "cardholder")
+          "patient", "person", "client", "shopper", "visitor", "student", "employee", "applicant", "cardholder",
+          "child", "kid", "adult", "senior", "owner", "holder")
+THINGS = ("vehicle", "car", "bike", "battery", "stock", "inventory", "product", "item", "listing", "room",
+          "building", "property", "asset", "machine", "server", "system", "fleet", "aircraft", "plane", "tyre",
+          "tire", "engine", "cache", "page", "content", "order", "booking", "ticket", "app", "model", "brand", "os",
+          "platform", "track", "event", "day", "season", "horse", "course", "data", "network", "zone", "area",
+          "region", "warehouse", "store", "outlet", "crop", "fruit")
 # Values that ARE a protected attribute, whatever the signal is called: `segment: [male, female]` (review L2).
 PROTECTED_VALUES = frozenset((
-    "male", "female", "transgender", "non_binary", "nonbinary", "intersex", "gay", "lesbian", "bisexual",
-    "hindu", "muslim", "christian", "sikh", "jain", "buddhist", "parsi", "jewish", "atheist",
-    "dalit", "brahmin", "adivasi", "obc", "scheduled_caste", "scheduled_tribe", "pregnant"))
+    "male", "female", "men", "women", "man", "woman", "boy", "girl", "boys", "girls", "ladies", "gents",
+    "trans", "transgender", "trans_man", "trans_woman", "transman", "transwoman", "non_binary", "nonbinary",
+    "intersex", "gay", "lesbian", "bisexual", "hindu", "muslim", "christian", "sikh", "jain", "buddhist", "parsi",
+    "jewish", "atheist", "dalit", "brahmin", "adivasi", "obc", "scheduled_caste", "scheduled_tribe", "pregnant"))
+_LITERAL = re.compile(r"'((?:[^'\\]|\\.)*)'" + r'|"((?:[^"\\]|\\.)*)"')   # 'text' or "text" in a rule
 # Not banned, but can stand in for a protected attribute (where someone lives can reveal caste or religion).
 PROXIES = ("pincode", "pin_code", "zip", "zipcode", "postcode", "postal_code", "neighbourhood", "neighborhood")
 
@@ -44,18 +53,22 @@ def _has(name: str, word: str) -> bool:
     return f"_{word}_" in f"_{name}_"
 
 
-def _about_a_person(name: str, word: str) -> bool:
-    return name == word or (_has(name, word) and any(_has(name, p) for p in PERSON))
+def _blocks(name: str, word: str) -> bool:
+    """An ambiguous word blocks unless the name is about a thing and names no person."""
+    if not _has(name, word):
+        return False
+    about_a_thing = any(_has(name, t) for t in THINGS) and not any(_has(name, p) for p in PERSON)
+    return not about_a_thing
 
 
 def _protected_word(name: str) -> str | None:
     return (next((w for w in PROTECTED if _has(name, w)), None)
-            or next((w for w in PROTECTED_IF_ABOUT_A_PERSON if _about_a_person(name, w)), None))
+            or next((w for w in AMBIGUOUS_PROTECTED if _blocks(name, w)), None))
 
 
 def _personal_word(name: str) -> str | None:
     return (next((w for w in PERSONAL if _has(name, w)), None)
-            or next((w for w in PERSONAL_IF_ABOUT_A_PERSON if _about_a_person(name, w)), None))
+            or next((w for w in AMBIGUOUS_PERSONAL if _blocks(name, w)), None))
 
 
 def _protected_values(values) -> list[str]:
@@ -73,13 +86,15 @@ def lint(pack: Mapping[str, Any], *, policy: Policy | None = None, banned_signal
     if schema_errors:
         return out.result()                       # the other checks need a well-formed pack
 
-    out.fairness(pack, set(banned_signals), set(fairness_exceptions))
+    exceptions = set(fairness_exceptions)
+    out.names(pack, set(banned_signals), exceptions)
     try:
         compiled = compile_pack(pack)
     except PackInvalid as e:
         for d in e.details:
             out.error("compile", d["path"], d["message"])
         return out.result()
+    out.protected_values(pack, compiled, exceptions)
 
     out.tenant_limits(compiled, policy)
     now = as_of or datetime.now(timezone.utc)
@@ -108,54 +123,80 @@ class _Lint:
 
     # ------------------------------------------------------------ fairness (platform policy L3 + tenant L2)
 
-    def fairness(self, pack: Mapping[str, Any], banned: set[str], exceptions: set[str]) -> None:
-        keys = _table_keys(pack)
-        for name, spec in pack["signals"].items():
+    def names(self, pack: Mapping[str, Any], banned: set[str], exceptions: set[str]) -> None:
+        for name in pack["signals"]:
             path = f"signals/{name}"
-            hit = _protected_word(name)
-            if hit:
-                what = "a protected attribute" if name == hit else f"a protected attribute ({hit})"
-                self.fairness_error(name, exceptions, "fairness", path,
-                                    f"Fairness violation: '{name}' is {what}; a price can't depend on who someone is")
-                continue
-            hit = _personal_word(name)
-            if hit:
-                self.fairness_error(name, exceptions, "personal_data", path,
-                                    f"'{name}' identifies a person ({hit}); prices are never set from personal data")
-                continue
-            values = _protected_values(list(spec.get("values", ())) + keys.get(name, []))
-            if values:
-                self.fairness_error(name, exceptions, "fairness", path,
-                                    f"Fairness violation: '{name}' takes protected values ({', '.join(values)}); "
-                                    "a price can't depend on who someone is, whatever the signal is called")
-                continue
-            if name in banned:
+            if name in banned:                                      # always, exception or not
                 self.error("banned_signal", path, f"'{name}' is banned by this tenant's policy")
-                continue
-            hit = next((w for w in PROXIES if _has(name, w)), None)
-            if hit:
-                self.warn("fairness_proxy", path, f"'{name}' ({hit}) can stand in for a protected attribute; "
-                                                  "check prices don't differ unfairly by area")
+            protected, personal = _protected_word(name), _personal_word(name)
+            if protected:
+                what = "a protected attribute" if name == protected else f"a protected attribute ({protected})"
+                self.fairness(exceptions, {name}, path,
+                              f"Fairness violation: '{name}' is {what}; a price can't depend on who someone is")
+            if personal:                                            # never excepted: no personalised pricing
+                self.error("personal_data", path, f"'{name}' identifies a person ({personal}); prices are never "
+                                                  "set from personal data")
+            if not (protected or personal):
+                hit = next((w for w in PROXIES if _has(name, w)), None)
+                if hit:
+                    self.warn("fairness_proxy", path, f"'{name}' ({hit}) can stand in for a protected attribute; "
+                                                      "check prices don't differ unfairly by area")
 
-    def fairness_error(self, name: str, exceptions: set[str], code: str, path: str, message: str) -> None:
-        if name in exceptions:
+    def protected_values(self, pack: Mapping[str, Any], compiled, exceptions: set[str]) -> None:
+        """Protected VALUES under any name: enum values, table keys, and string literals in rules (review L2)."""
+        taken: dict[str, set[str]] = {n: set(s.values) for n, s in compiled.signals.items()}
+        for adj in [compiled.base] + [r.then for g in compiled.groups for r in g.rules]:
+            if adj.op == "lookup_table" and adj.table:
+                for key in adj.table:
+                    for sig, k in zip((adj.signal,) if adj.signal else adj.signals,
+                                      (key,) if adj.signal else key, strict=False):
+                        taken.setdefault(sig, set()).add(k)
+        for name, values in taken.items():
+            hits = _protected_values(values)
+            if hits:
+                self.fairness(exceptions, {name}, f"signals/{name}",
+                              f"Fairness violation: '{name}' takes protected values ({', '.join(hits)}); a price "
+                              "can't depend on who someone is, whatever the signal is called")
+        raw = {r["id"]: (gi, ri, r) for gi, g in enumerate(pack["groups"]) for ri, r in enumerate(g["rules"])}
+        for group in compiled.groups:
+            for rule in group.rules:
+                gi, ri, r = raw[rule.id]
+                text = r["when"] + " " + str(r["then"].get("expr", ""))
+                hits = _protected_values(a or b for a, b in _LITERAL.findall(text))
+                if hits:
+                    names = set(rule.when.names) | set(rule.then.expr.names if rule.then.expr else ())
+                    self.fairness(exceptions, names, f"groups/{gi}/rules/{ri}",
+                                  f"Fairness violation: rule {rule.id} compares with protected value(s) "
+                                  f"{', '.join(hits)}; a price can't depend on who someone is")
+
+    def fairness(self, exceptions: set[str], signals: set[str], path: str, message: str) -> None:
+        """A fairness error, unless the tenant cleared every signal involved: then a warning an approver signs off.
+        Personal data and banned signals are never excepted."""
+        if signals and signals <= exceptions:
             self.warn("fairness_exception", path, f"{message} — allowed by a tenant exception; an approver must "
                                                   "sign this off before publish")
         else:
-            self.error(code, path, message)
+            self.error("fairness", path, message)
 
     # ------------------------------------------------------------ calendars that run out (review C1)
 
     def calendars(self, compiled, now: datetime) -> None:
-        horizon = (now + timedelta(days=548)).date()           # about 18 months ahead
+        """Warn when a calendar is about to stop working, not merely because it's finite: no date at all in the
+        next 12 months, or a recurring (multi-year) calendar whose last date is under 6 months away."""
+        today = now.date()
         for spec in compiled.signals.values():
             if not spec.calendar:
                 continue
             last = max(spec.calendar)
-            if last < horizon:
+            upcoming = [d for d in spec.calendar if today <= d <= today + timedelta(days=365)]
+            recurring = len({d.year for d in spec.calendar}) > 1
+            if not upcoming:
                 self.warn("calendar_ends", f"signals/{spec.name}",
-                          f"{spec.name} has no dates after {last}: from then on every day is 'none' and those "
-                          "rules stop firing. Add later dates (a calendar: section in the pack)")
+                          f"{spec.name} has no dates in the next 12 months (last: {last}): every day is 'none' "
+                          "and those rules won't fire. Add dates (a calendar: section in the pack)")
+            elif recurring and last < today + timedelta(days=183):
+                self.warn("calendar_ends", f"signals/{spec.name}",
+                          f"{spec.name} runs out on {last}: add next year's dates before then")
 
     # ------------------------------------------------------------ tenant limits (L2 vs L1)
 
@@ -166,10 +207,13 @@ class _Lint:
         if policy.max_price is not None and g.ceiling.op == "abs" and g.ceiling.value > Decimal(policy.max_price):
             self.error("tenant_limit", "guards/ceiling", f"ceiling {g.ceiling.value} is above the tenant maximum "
                                                          f"{policy.max_price}")
-        if policy.min_price is not None and g.ceiling.op == "abs" and Decimal(policy.min_price) > g.ceiling.value:
+        # the next two only add information when the OTHER guard isn't a fixed amount (else a check below fires)
+        if (policy.min_price is not None and g.ceiling.op == "abs" and g.floor.op != "abs"
+                and Decimal(policy.min_price) > g.ceiling.value):
             self.error("tenant_limit", "guards/ceiling", f"tenant minimum {policy.min_price} is above the ceiling "
                                                          f"{g.ceiling.value}: no price is ever valid (review S5)")
-        if policy.max_price is not None and g.floor.op == "abs" and Decimal(policy.max_price) < g.floor.value:
+        if (policy.max_price is not None and g.floor.op == "abs" and g.ceiling.op != "abs"
+                and Decimal(policy.max_price) < g.floor.value):
             self.error("tenant_limit", "guards/floor", f"tenant maximum {policy.max_price} is below the floor "
                                                        f"{g.floor.value}: no price is ever valid (review S5)")
         if policy.min_price is not None and g.floor.op == "abs" and g.floor.value < Decimal(policy.min_price):
@@ -275,17 +319,3 @@ class _Lint:
                 self.warn("unused_signal", f"signals/{name}", f"{name} is declared but no rule, table or guard "
                                                               "uses it")
 
-
-def _table_keys(pack: Mapping[str, Any]) -> dict[str, list[str]]:
-    """Lookup-table keys per signal, read from the raw pack (a key IS a value the signal takes)."""
-    out: dict[str, list[str]] = {}
-    adjustments = [pack["base"]] + [r["then"] for g in pack["groups"] for r in g["rules"]]
-    for adj in adjustments:
-        if adj.get("op") != "lookup_table":
-            continue
-        if "table" in adj:
-            out.setdefault(adj["signal"], []).extend(str(k) for k in adj["table"])
-        for row in adj.get("rows", ()):
-            for sig, key in zip(adj.get("signals", ()), row["key"], strict=False):
-                out.setdefault(sig, []).append(str(key))
-    return out

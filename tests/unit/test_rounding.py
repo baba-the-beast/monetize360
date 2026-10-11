@@ -83,3 +83,10 @@ def test_step_and_ending_combinations(price, step, ending, expected):
 def test_up_mode_forced_down_by_the_ceiling_is_flagged():
     got, flag = r("4990", "50", "up", bounds=(Decimal("1000"), Decimal("4980")))
     assert got == Decimal("4950") and flag.startswith("rounding went down")
+
+
+def test_compile_pack_stores_the_grid():
+    from monetize360.engine import compile_pack
+    from tests.conftest import load_pack
+    assert compile_pack(load_pack("airline.yaml")).rounding.grid == (9900, 10000)     # step 1, ending 99
+    assert compile_pack(load_pack("hotel.yaml")).rounding.grid == (0, 5000)           # step 50

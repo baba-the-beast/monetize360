@@ -195,3 +195,10 @@ def test_feed_timestamp_without_timezone():
     with pytest.raises(SignalInvalid, match="written_at must be a datetime with a timezone"):
         evaluate(redis_pack("use_default"), Context(base_price=Decimal("1000"), as_of=WEDNESDAY,
                                                     redis_signals={"comp": ("1200", datetime(2026, 10, 14, 8))}))
+
+
+def test_tenant_min_price_zero_means_no_minimum(hotel):
+    # /code-review: min_price 0 was valid before S2 and must stay valid (the 0.01 platform floor still applies)
+    r = evaluate(hotel, ctx("3000", occupancy="0.5", is_weekend=False, festival="none"),
+                 policy=Policy(min_price=Decimal(0)))
+    assert r.price == Decimal("3000.00")

@@ -26,8 +26,8 @@ cfs    = explain(pack, ctx, result, policy=None)                        # counte
 | `max_surge_x` | `Decimal \| None` | §6.1 `hard_upper` = `B × max_surge_x` (`tenant_surge`) |
 
 `banned_signals` and `require_two_person` are authoring-time checks (linter / publisher), not engine inputs.
-**Validated like any input:** `policy.min_price`, `policy.max_price` and `ctx.reference_price` must be finite,
-> 0 and ≤ 10¹²; `policy.max_surge_x` finite, > 0 and ≤ 1000; a feed's `written_at` must carry a timezone. Else
+**Validated like any input:** `policy.max_price` and `ctx.reference_price` must be finite, > 0 and ≤ 10¹²;
+`policy.min_price` finite, ≥ 0 (0 = no tenant minimum) and ≤ 10¹²; `policy.max_surge_x` finite, > 0 and ≤ 1000; a feed's `written_at` must carry a timezone. Else
 `SignalInvalid` (422) naming the field — never blamed on the pack.
 
 **Kill modes are not engine logic:** `freeze` is answered by the API layer from the stored last price;
@@ -304,7 +304,7 @@ Never compute a counterfactual by subtracting deltas.
   zero-delta rule lets the next rule apply, so the price does change.
 - A re-run that raises `InvariantViolation` is re-raised — an engine bug is never hidden in an
   explanation. Any other error is reported, not dropped: `{"if": "without: <reason>", "error": {code,
-  message}}` (e.g. without rule A, rule B divides by zero). Failed ones are listed after the priced ones.
+  message}}` (e.g. without rule A, rule B divides by zero). Failed ones are listed after the 5 priced ones and are never cut.
 
 ---
 

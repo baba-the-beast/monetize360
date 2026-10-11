@@ -87,7 +87,7 @@ Base URL (demo): `http://localhost:8080` · Interactive docs: `/docs` · All bod
 `valid_until` = `as_of` + 15 min by default (clients may reuse the price until then).
 
 A counterfactual whose re-run fails is reported, not dropped: `{ "if": "without: Plus 100", "error": { "code":
-"rule_error", "message": "..." } }`, listed after the priced ones.
+"rule_error", "message": "..." } }`, listed after the (up to 5) priced ones and never cut.
 
 ### `POST /v1/price/{domain}/batch`
 

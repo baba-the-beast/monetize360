@@ -42,7 +42,7 @@ def _at_least(x: int, g: tuple[int, int]) -> int:
 
 def round_price(price: Decimal, rounding: Rounding, lower: Decimal, upper: Decimal) -> tuple[Decimal, str | None]:
     """Returns (rounded price, flag or None)."""
-    g = grid(rounding)
+    g = rounding.grid or grid(rounding)              # compile_pack stores it; computed here only for bare Roundings
     if g is None:                                    # unreachable: compile_pack refuses such a pack
         return price, SKIPPED
     p = price * 100                                  # exact; whole cents in the engine, but never assume it

@@ -175,7 +175,10 @@ def test_ambiguous_words_about_a_person_still_block(signal, code):
 def test_protected_values_under_a_neutral_name():
     signals = {"segment": {"type": "enum", "values": ["male", "female"], "source": "request"}}
     result = lint(one_group(rule("r", "segment == 'female'"), signals=signals))
-    assert codes(result) == ["fairness"] and "takes protected values (female, male)" in result["errors"][0]["message"]
+    messages = [e["message"] for e in result["errors"]]
+    assert set(codes(result)) == {"fairness"}
+    assert any("'segment' takes protected values (female, male)" in m for m in messages)    # the signal
+    assert any("rule r compares with protected value(s) female" in m for m in messages)     # and the rule
 
 
 def test_protected_values_as_table_keys():
@@ -190,14 +193,81 @@ def test_tenant_exception_turns_the_error_into_a_signed_off_warning():
     assert result["ok"] and "fairness_exception" in codes(result, "warnings")
 
 
-def test_calendar_that_runs_out_is_flagged():
-    result = lint(load_pack("hotel.yaml"), as_of=datetime(2026, 10, 11, tzinfo=timezone.utc))
-    warning = next(w for w in result["warnings"] if w["code"] == "calendar_ends")
-    assert "no dates after 2027-10-29" in warning["message"]
+@pytest.mark.parametrize("as_of, expected", [
+    (datetime(2026, 10, 11, tzinfo=timezone.utc), None),                               # a year of dates ahead
+    (datetime(2027, 6, 1, tzinfo=timezone.utc), "festival runs out on 2027-10-29"),    # < 6 months left
+    (datetime(2027, 11, 1, tzinfo=timezone.utc), "festival has no dates in the next 12 months"),
+])
+def test_calendar_warns_only_when_it_is_about_to_stop_working(as_of, expected):
+    found = [w["message"] for w in lint(load_pack("hotel.yaml"), as_of=as_of)["warnings"]
+             if w["code"] == "calendar_ends"]
+    assert (found == []) if expected is None else expected in found[0]
 
 
-@pytest.mark.parametrize("policy, path", [(Policy(min_price=Decimal("2000000")), "guards/ceiling"),
-                                          (Policy(max_price=Decimal("0.5")), "guards/floor")])
-def test_tenant_limits_that_leave_no_valid_price(policy, path):
-    result = lint(one_group(rule("r", "true")), policy=policy)
-    assert "tenant_limit" in codes(result) and path in [e["path"] for e in result["errors"]]
+def test_one_off_event_calendar_is_quiet_until_it_has_passed():
+    signals = {"sale_day": {"type": "enum", "values": ["none", "mega_sale"], "source": "public"}}
+    pack = one_group(rule("r", "sale_day == 'mega_sale'"), signals=signals,
+                     calendar={"sale_day": {"2026-12-01": "mega_sale"}})
+    soon = lint(pack, as_of=datetime(2026, 10, 11, tzinfo=timezone.utc))["warnings"]
+    later = lint(pack, as_of=datetime(2027, 1, 1, tzinfo=timezone.utc))["warnings"]
+    assert "calendar_ends" not in [w["code"] for w in soon] and "calendar_ends" in [w["code"] for w in later]
+
+
+@pytest.mark.parametrize("guards, policy, message", [
+    ({"floor": {"op": "pct_of_base", "value": 50}, "ceiling": {"op": "abs", "value": 1000}},
+     Policy(min_price=Decimal("2000")), "tenant minimum 2000 is above the ceiling 1000"),
+    ({"floor": {"op": "abs", "value": 100}, "ceiling": {"op": "pct_of_base", "value": 200}},
+     Policy(max_price=Decimal("50")), "tenant maximum 50 is below the floor 100"),
+])
+def test_tenant_limits_that_leave_no_valid_price(guards, policy, message):
+    result = lint(one_group(rule("r", "true"), guards=guards), policy=policy)
+    assert codes(result) == ["tenant_limit"] and message in result["errors"][0]["message"]
+
+
+def test_one_mistake_one_error_when_both_guards_are_fixed():
+    result = lint(one_group(rule("r", "true")), policy=Policy(max_price=Decimal("0.5")))   # floor 1, ceiling 1e6
+    assert codes(result) == ["tenant_limit"]
+
+
+# ---------------------------------------------------------------- /code-review of round 3
+
+@pytest.mark.parametrize("signal, code", [("age_group", "fairness"), ("age_band", "fairness"),
+                                          ("child_age", "fairness"), ("health_condition", "fairness"),
+                                          ("sex_category", "fairness"), ("is_disabled", "fairness"),
+                                          ("home_address", "personal_data"), ("contact_phone", "personal_data"),
+                                          ("customer_vehicle_age", "fairness")])      # a person word wins
+def test_ambiguous_words_block_by_default(signal, code):
+    pack = one_group(rule("r", f"{signal} > 1"), signals={signal: {"type": "number", "source": "request"}})
+    assert codes(lint(pack)) == [code]
+
+
+@pytest.mark.parametrize("values, when", [(["men", "women"], "segment == 'women'"),
+                                          (["boy", "girl"], "segment == 'girl'"),
+                                          (["ladies", "gents"], "segment in ['ladies']")])
+def test_everyday_gender_words_are_protected_values(values, when):
+    signals = {"segment": {"type": "enum", "values": values, "source": "request"}}
+    assert not lint(one_group(rule("r", when), signals=signals))["ok"]
+
+
+def test_protected_value_in_a_rule_on_a_text_signal():
+    signals = {"segment": {"type": "text", "source": "request"}}
+    result = lint(one_group(rule("r", "segment == 'female'"), signals=signals))
+    assert codes(result) == ["fairness"] and result["errors"][0]["path"] == "groups/0/rules/0"
+
+
+def test_personal_data_is_never_excepted():
+    pack = one_group(rule("r", "customer_email > 1"),
+                     signals={"customer_email": {"type": "number", "source": "request"}})
+    assert codes(lint(pack, fairness_exceptions=["customer_email"])) == ["personal_data"]
+
+
+def test_banned_still_applies_to_an_excepted_signal():
+    pack = one_group(rule("r", "customer_age > 60"), signals={"customer_age": {"type": "int", "source": "request"}})
+    result = lint(pack, banned_signals=["customer_age"], fairness_exceptions=["customer_age"])
+    assert codes(result) == ["banned_signal"] and "fairness_exception" in codes(result, "warnings")
+
+
+def test_rule_literal_on_an_excepted_signal_is_a_warning():
+    signals = {"gender": {"type": "enum", "values": ["male", "female"], "source": "request"}}
+    result = lint(one_group(rule("r", "gender == 'female'"), signals=signals), fairness_exceptions=["gender"])
+    assert result["ok"] and "fairness_exception" in codes(result, "warnings")

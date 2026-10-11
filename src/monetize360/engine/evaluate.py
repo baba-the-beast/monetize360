@@ -30,7 +30,7 @@ def evaluate(pack: CompiledPack, ctx: Context, policy: Policy | None = None,
         raise SignalInvalid("as_of must include a timezone", [{"path": "as_of"}])
     _check_amount(ctx.reference_price, "reference_price")
     if policy is not None:
-        _check_amount(policy.min_price, "policy.min_price")
+        _check_amount(policy.min_price, "policy.min_price", allow_zero=True)   # 0 = "no tenant minimum"
         _check_amount(policy.max_price, "policy.max_price")
         _check_amount(policy.max_surge_x, "policy.max_surge_x", limit=Decimal(1000))
     try:
@@ -41,7 +41,7 @@ def evaluate(pack: CompiledPack, ctx: Context, policy: Policy | None = None,
         raise RuleError(f"price arithmetic out of range ({type(e).__name__}): check the pack's numbers") from None
 
 
-def _check_amount(raw, path: str, limit: Decimal = MAX_ABS) -> None:
+def _check_amount(raw, path: str, limit: Decimal = MAX_ABS, allow_zero: bool = False) -> None:
     """A tenant limit or reference price must be a finite number > 0 and <= limit. A bad one is the CALLER's
     input (422 naming it), never 'check the pack's numbers' (review S2)."""
     if raw is None:
@@ -50,8 +50,9 @@ def _check_amount(raw, path: str, limit: Decimal = MAX_ABS) -> None:
         v = Decimal(str(raw))
     except ArithmeticError:
         v = None
-    if v is None or not v.is_finite() or v <= 0 or v > limit:
-        raise SignalInvalid(f"{path} must be a number greater than 0 and at most {limit}",
+    if v is None or not v.is_finite() or v < 0 or (v == 0 and not allow_zero) or v > limit:
+        lowest = "0 or more" if allow_zero else "greater than 0"
+        raise SignalInvalid(f"{path} must be a number {lowest} and at most {limit}",
                             [{"path": path, "value": str(raw)}])
 
 

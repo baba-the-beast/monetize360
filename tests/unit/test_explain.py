@@ -81,3 +81,17 @@ def test_a_counterfactual_that_fails_is_reported_not_dropped():
     failed = [cf for cf in cfs if "error" in cf]
     assert [cf["if"] for cf in failed] == ["without: Plus 100"]
     assert failed[0]["error"]["code"] == "rule_error" and cfs[-1] is failed[0]      # failures listed last
+
+
+def test_a_failed_counterfactual_is_never_cut_by_the_top_5():
+    # 7 rules change the price; without "a" (+1), "b" divides by (1075 - 1075)
+    rules = [{"id": "a", "when": "true", "then": {"op": "abs", "value": 1}, "reason": "Plus 1"}]
+    rules += [{"id": f"x{i}", "when": "true", "then": {"op": "abs", "value": 10 + i}, "reason": f"x{i}"}
+              for i in range(6)]
+    rules += [{"id": "b", "when": "true", "then": {"op": "formula", "expr": "price / (price - 1075) * 1075"},
+               "reason": "Odd"}]
+    pack = compile_pack(make_pack([{"name": "g", "stacking": "multiply", "rules": rules}]))
+    c = ctx()
+    cfs = explain(pack, c, evaluate(pack, c))
+    assert len([cf for cf in cfs if "price" in cf]) == 5
+    assert [cf["if"] for cf in cfs if "error" in cf] == ["without: Plus 1"]

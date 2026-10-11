@@ -224,15 +224,21 @@ def test_simulate_ignores_keys_and_anchors(client, auth, price):
 
 # ---------------------------------------------------------------- isolation and outage
 
-def test_the_database_keeps_state_and_keys_per_tenant(database):
-    with psycopg.connect(database.app_url) as conn, conn.transaction():
-        conn.execute("SELECT set_config('app.tenant_id', 'airline_002', true)")
+def test_the_database_keeps_state_and_keys_per_tenant(database, price):
+    price(body("rls-room", 0, idempotency_key="rls-key"))
+    price(body("rls-room", 0, idempotency_key="rls-key"), tenant="travel_003")
+    seen = {}
+    for tenant in ("hotel_001", "travel_003", "airline_002"):
+        with psycopg.connect(database.app_url) as conn, conn.transaction():
+            conn.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant,))
+            for table in ("price_state", "idempotency_keys"):
+                owners = {r[0] for r in conn.execute(f"SELECT DISTINCT tenant_id FROM {table}")}
+                assert owners <= {tenant}, (tenant, table, owners)          # only ever its own rows
+                seen[tenant, table] = bool(owners)
+    assert seen["hotel_001", "price_state"] and seen["travel_003", "idempotency_keys"]
+    with psycopg.connect(database.app_url) as conn:                           # no tenant set: nothing at all
         assert conn.execute("SELECT count(*) FROM price_state").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM idempotency_keys").fetchone()[0] == 0
-    with psycopg.connect(database.app_url) as conn, conn.transaction():
-        conn.execute("SELECT set_config('app.tenant_id', 'hotel_001', true)")
-        assert conn.execute("SELECT count(*) FROM price_state").fetchone()[0] > 0
-        assert conn.execute("SELECT count(*) FROM price_state WHERE tenant_id <> 'hotel_001'").fetchone()[0] == 0
 
 
 def test_when_the_database_is_down_the_response_says_what_was_not_enforced(database, auth, tmp_path):

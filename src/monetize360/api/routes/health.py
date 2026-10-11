@@ -40,15 +40,16 @@ def healthz() -> dict[str, str]:
 
 @router.get("/readyz")
 def readyz(request: Request) -> JSONResponse:
-    packs, db = request.app.state.packs, request.app.state.db
+    packs, db, events = request.app.state.packs, request.app.state.db, request.app.state.events
     checks = {
         "packs_loaded": len(packs),
         "pack_load_error_count": len(packs.load_errors),
         "self_test": self_test_ok(),
         "database": "not_configured" if db is None else ("ok" if db.ping() else "down"),
-        "redis": "not_configured",          # M5: becomes a real ping
+        # the listener's own state, not a ping: this endpoint must stay fast even when Redis is far away
+        "redis": "not_configured" if events is None else ("ok" if events.connected else "down"),
     }
-    # the database is NOT required to be ready: packs are in memory, so pricing continues if Postgres is down
+    # neither the database nor Redis is required to be ready: packs are in memory, so pricing continues
     ready = checks["packs_loaded"] > 0 and checks["self_test"]
     if request.app.state.dev_tenant:
         # this endpoint needs no key, so tenant names and pack errors are shown in local dev mode only;

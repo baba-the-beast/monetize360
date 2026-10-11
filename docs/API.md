@@ -135,8 +135,9 @@ Same response **without** `price_id`; nothing is audited, `reference_price` may 
 
 | Method & path | Body → Response |
 |---|---|
-| `POST /v1/admin/keys` | `{ role, domains, rate_limit_rps?, expires_at? }` → `{ key_id, api_key }` — **secret shown once** |
-| `POST /v1/admin/keys/{key_id}/revoke` | → `{ revoked_at }`; effective on all replicas immediately |
+| `POST /v1/admin/keys` | `{ role, domains, name?, rate_limit_rps?, expires_at?, env? }` → `201 { key_id, api_key, name, role, domains, rate_limit_rps, expires_at, note }` — **the key is shown once** (`Cache-Control: no-store`); only its SHA-256 is stored. A key can't create a key for domains outside its own scope (403) |
+| `GET /v1/admin/keys` | → `{ keys: [{ key_id, name, role, domains, rate_limit_rps, status: active \| expired \| revoked, created_at, created_by, expires_at, revoked_at, revoked_by }] }` — never the secret |
+| `POST /v1/admin/keys/{key_id}/revoke` | → `{ key_id, revoked_at, broadcast }`. Refused by this replica at once and by the others as soon as they hear the broadcast (`broadcast: false` = Redis unreachable: they find out within the 60 s key cache). `404 key_not_found` for a key that isn't yours; `409 last_admin_key` if it is your only working admin key |
 | `PUT /v1/admin/policy` | `{ min_price?, max_price?, max_surge_x?, banned_signals?, require_two_person? }` |
 | `POST /v1/admin/kill` | `{ domain, mode: "normal" \| "freeze" \| "base_only" }` |
 

@@ -77,6 +77,10 @@ class KeyVerifier:
     def evict(self, key_id: str) -> None:
         self._cache.pop(key_id, None)
 
+    def clear(self) -> None:
+        """Forget every cached key: the next request for each one re-reads the database."""
+        self._cache.clear()
+
     def _record(self, key_id: str) -> KeyRecord | None:
         now = self._monotonic()
         hit = self._cache.get(key_id)

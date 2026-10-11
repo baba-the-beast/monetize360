@@ -24,24 +24,40 @@ def lookup(db: Database, key_id: str) -> KeyRecord | None:
 
 
 def create(db: Database, tenant_id: str, key_id: str, secret_sha256: bytes, role: str, domains: Sequence[str],
-           *, rate_limit_rps: int = 200, expires_at: datetime | None = None) -> None:
+           *, rate_limit_rps: int = 200, expires_at: datetime | None = None, name: str | None = None,
+           created_by: str | None = None) -> None:
     with db.tenant(tenant_id) as conn:
         conn.execute(
-            "INSERT INTO api_keys (key_id, tenant_id, secret_sha256, role, domains, rate_limit_rps, expires_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (key_id, tenant_id, secret_sha256, role, list(domains), rate_limit_rps, expires_at))
+            "INSERT INTO api_keys (key_id, tenant_id, secret_sha256, role, domains, rate_limit_rps, expires_at, "
+            "name, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (key_id, tenant_id, secret_sha256, role, list(domains), rate_limit_rps, expires_at, name, created_by))
 
 
-def revoke(db: Database, tenant_id: str, key_id: str) -> datetime | None:
-    """Revoke one of THIS tenant's keys. Returns when it was revoked, or None if the tenant has no such key."""
+class LastAdminKey(Exception):
+    """Revoking this key would leave the tenant with no working admin key."""
+
+
+def revoke(db: Database, tenant_id: str, key_id: str, *, revoked_by: str | None = None,
+           keep_one_admin: bool = False) -> datetime | None:
+    """Revoke one of THIS tenant's keys. Returns when it was revoked, or None if the tenant has no such key.
+    With keep_one_admin, refuses (LastAdminKey) to revoke the tenant's only working admin key."""
     with db.tenant(tenant_id) as conn:
+        if keep_one_admin:
+            # lock the tenant's admin keys so two revokes at once can't each think the other key remains
+            admins = conn.execute(
+                "SELECT key_id FROM api_keys WHERE role = 'admin' AND revoked_at IS NULL "
+                "AND (expires_at IS NULL OR expires_at > now()) FOR UPDATE").fetchall()
+            if [a["key_id"] for a in admins] == [key_id]:
+                raise LastAdminKey(key_id)
         row = conn.execute(
-            "UPDATE api_keys SET revoked_at = COALESCE(revoked_at, now()) WHERE key_id = %s RETURNING revoked_at",
-            (key_id,)).fetchone()
+            "UPDATE api_keys SET revoked_by = COALESCE(revoked_by, %s), revoked_at = COALESCE(revoked_at, now()) "
+            "WHERE key_id = %s RETURNING revoked_at", (revoked_by, key_id)).fetchone()
     return row["revoked_at"] if row else None
 
 
-def list_keys(db: Database, tenant_id: str) -> list[KeyRecord]:
+def list_keys(db: Database, tenant_id: str) -> list[dict]:
+    """This tenant's keys, oldest first. Never the secret or its hash."""
     with db.tenant(tenant_id) as conn:
-        rows = conn.execute(f"SELECT {_COLUMNS} FROM api_keys ORDER BY created_at, key_id").fetchall()   # noqa: S608
-    return [_record(r) for r in rows]
+        return conn.execute(
+            "SELECT key_id, name, role, domains, rate_limit_rps, created_at, created_by, expires_at, revoked_at, "
+            "revoked_by FROM api_keys ORDER BY created_at, key_id").fetchall()

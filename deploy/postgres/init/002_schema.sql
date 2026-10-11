@@ -27,7 +27,10 @@ CREATE TABLE api_keys (
     rate_limit_rps  integer NOT NULL DEFAULT 200,
     expires_at      timestamptz,
     revoked_at      timestamptz,
-    created_at      timestamptz NOT NULL DEFAULT now()
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    name            text,                                 -- what the key is for, e.g. "checkout server"
+    created_by      text,                                 -- key_id of the admin key that made it
+    revoked_by      text
 );
 
 CREATE TABLE packs (
@@ -111,7 +114,7 @@ CREATE INDEX idempotency_age_idx ON idempotency_keys (tenant_id, created_at);
 GRANT SELECT ON tenants TO m360_app;                           -- tenants are created by the operator (owner role)
 GRANT SELECT, INSERT, UPDATE ON tenant_policy, pack_pointer TO m360_app;
 GRANT SELECT, INSERT ON api_keys TO m360_app;
-GRANT UPDATE (revoked_at) ON api_keys TO m360_app;            -- create and revoke; never rewrite secret, role or scope
+GRANT UPDATE (revoked_at, revoked_by) ON api_keys TO m360_app;   -- create and revoke; never rewrite secret, role, scope
 GRANT SELECT, INSERT, UPDATE (status, approver, compiled, lint_report, verify_report) ON packs TO m360_app;
 GRANT SELECT, INSERT ON audit_log TO m360_app;                -- no UPDATE, no DELETE
 GRANT SELECT, INSERT, UPDATE ON price_state TO m360_app;

@@ -9,6 +9,7 @@ Two ways to run:
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
@@ -16,6 +17,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from monetize360.api import errors
+from monetize360.api.routes import admin as admin_routes
 from monetize360.api.routes import audit as audit_routes
 from monetize360.api.routes import health, price
 from monetize360.config import settings
@@ -23,22 +25,29 @@ from monetize360.security.keys import KeyVerifier
 from monetize360.security.ratelimit import RateLimiter
 from monetize360.store import api_keys, packs
 from monetize360.store.audit import AuditLog
+from monetize360.store.cache import Events
 from monetize360.store.db import Database
 from monetize360.store.packcache import PackCache
 
 log = logging.getLogger("monetize360.api")
 
 
+_KEY_ID = re.compile(r"[A-Z2-9]{10}")
+
+
 def _base_app(title: str, dev_tenant: str | None, packs_dir: Path | None, database_url: str | None,
-              audit_spool_dir: Path | None = None) -> FastAPI:
+              audit_spool_dir: Path | None = None, redis_url: str | None = None) -> FastAPI:
     cfg = settings()
     # an explicit argument wins over the environment (tests and scripts pass arguments)
     if database_url is None and dev_tenant is None:
         database_url, dev_tenant = cfg.database_url, cfg.dev_tenant
+        redis_url = cfg.redis_url if redis_url is None else redis_url
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
+        if app.state.events is not None:
+            app.state.events.stop()
         if app.state.audit is not None:
             app.state.audit.stop()
         if app.state.db is not None:
@@ -47,7 +56,7 @@ def _base_app(title: str, dev_tenant: str | None, packs_dir: Path | None, databa
     app = FastAPI(title=title, version="0.1.0", lifespan=lifespan)
     app.state.packs = PackCache()
     app.state.limiter = RateLimiter()
-    app.state.db = app.state.keys = app.state.dev_tenant = app.state.audit = None
+    app.state.db = app.state.keys = app.state.dev_tenant = app.state.audit = app.state.events = None
 
     if database_url:
         if dev_tenant:
@@ -58,6 +67,14 @@ def _base_app(title: str, dev_tenant: str | None, packs_dir: Path | None, databa
         # every price is appended to the audit chain in Postgres; a local spool covers database outages
         app.state.audit = AuditLog(app.state.db, audit_spool_dir or cfg.audit_spool_dir)
         app.state.audit.start_draining()
+        if redis_url:
+            # broadcasts only (store/cache.py): a revoked key is dropped by every replica at once
+            keys, events = app.state.keys, Events(redis_url, app.state.db.fingerprint)
+            events.on("key_revoked", lambda m: keys.evict(m["key_id"])
+                      if isinstance(m.get("key_id"), str) and _KEY_ID.fullmatch(m["key_id"]) else None)
+            events.on_connect(keys.clear)          # anything revoked while we weren't listening
+            events.start()
+            app.state.events = events
         loaded = app.state.packs.load_rows(packs.live_packs(app.state.db))
         log.info("API keys ON, %d live pack(s) loaded from the database", loaded)
     elif dev_tenant:
@@ -73,25 +90,30 @@ def _base_app(title: str, dev_tenant: str | None, packs_dir: Path | None, databa
 
 
 def create_pricing_app(*, dev_tenant: str | None = None, packs_dir: Path | None = None,
-                       database_url: str | None = None, audit_spool_dir: Path | None = None) -> FastAPI:
+                       database_url: str | None = None, audit_spool_dir: Path | None = None,
+                       redis_url: str | None = None) -> FastAPI:
     """Decision plane: /v1/price, /v1/price/.../batch, /v1/simulate. Stateless; scale by adding replicas."""
-    app = _base_app("Monetize360 pricing API", dev_tenant, packs_dir, database_url, audit_spool_dir)
+    app = _base_app("Monetize360 pricing API", dev_tenant, packs_dir, database_url, audit_spool_dir, redis_url)
     app.include_router(price.router)
     return app
 
 
 def create_control_app(*, dev_tenant: str | None = None, packs_dir: Path | None = None,
-                       database_url: str | None = None, audit_spool_dir: Path | None = None) -> FastAPI:
-    """Control plane: audit, replay (and, from M5/M7, packs and admin)."""
-    app = _base_app("Monetize360 control API", dev_tenant, packs_dir, database_url, audit_spool_dir)
+                       database_url: str | None = None, audit_spool_dir: Path | None = None,
+                       redis_url: str | None = None) -> FastAPI:
+    """Control plane: audit, replay, API keys (and, from M5/M7, packs, policy and the kill switch)."""
+    app = _base_app("Monetize360 control API", dev_tenant, packs_dir, database_url, audit_spool_dir, redis_url)
     app.include_router(audit_routes.router)
+    app.include_router(admin_routes.router)
     return app
 
 
 def create_app(*, dev_tenant: str | None = None, packs_dir: Path | None = None,
-               database_url: str | None = None, audit_spool_dir: Path | None = None) -> FastAPI:
+               database_url: str | None = None, audit_spool_dir: Path | None = None,
+               redis_url: str | None = None) -> FastAPI:
     """Both planes in one process: local development and demos without nginx (one Swagger for everything)."""
-    app = _base_app("Monetize360 API", dev_tenant, packs_dir, database_url, audit_spool_dir)
+    app = _base_app("Monetize360 API", dev_tenant, packs_dir, database_url, audit_spool_dir, redis_url)
     app.include_router(price.router)
     app.include_router(audit_routes.router)
+    app.include_router(admin_routes.router)
     return app

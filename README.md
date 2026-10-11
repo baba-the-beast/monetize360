@@ -66,8 +66,7 @@ pytest -m integration                     # against the real database (recreates
 
 With `DATABASE_URL` set, the tenant comes only from the API key and `DEV_TENANT` is ignored. If Postgres goes
 down, keys this replica has already seen keep pricing; unseen keys get 503 `auth_unavailable`.
-Not yet: shared rate limits and instant cross-replica revocation (Redis broadcasts) — until then a revoked key can
-live up to 60 s on other replicas and the rate limit is per replica.
+The rate limit is per replica (a key gets its limit on each server).
 
 ### Audit, replay and tamper detection (M6)
 
@@ -96,6 +95,13 @@ Both are enforced in the same Postgres transaction as the audit row.
 - **Idempotency** — send `"idempotency_key": "booking-77"`. A retry returns the first response (same
   `price_id`, no second audit row); the same key with a different body is `409 idempotency_conflict`.
   Keys last 24 hours, per tenant and domain.
+
+### API keys and instant revocation
+
+With an `admin` key: `POST /v1/admin/keys` (the new key is shown once), `GET /v1/admin/keys`,
+`POST /v1/admin/keys/{key_id}/revoke`. Add `REDIS_URL` to the environment and a key revoked on one server is
+refused by every other server within milliseconds; without Redis they find out within 60 seconds. Redis only
+carries these announcements: nothing is stored in it and no price request waits for it.
 
 ## Golden rule
 

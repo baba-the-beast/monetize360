@@ -182,6 +182,20 @@ Backstop:  cache entries expire after 60 s anyway (covers a missed event / Redis
 
 Worst case (Redis down at the moment of revocation): the key dies within 60 s. Documented, bounded, acceptable.
 
+**As built.** `POST /v1/admin/keys/{id}/revoke` updates Postgres, drops the key from this replica's cache and
+publishes `key_revoked` on a Redis channel named after the database (so two environments sharing one Redis
+don't hear each other). Measured with two server processes and a Redis ~140 ms away: the second server refuses
+the key about 5 ms after the revoke call returns. Three rules keep this safe on an untrusted, lossy channel:
+
+- **Messages only invalidate, never grant.** A replica that hears "key X revoked" forgets its cached copy and
+  asks Postgres again. Forging a message costs extra lookups; it can't give anyone access.
+- **After any connection gap a replica forgets every cached key**, so a revocation broadcast while it wasn't
+  listening still takes effect at once instead of after 60 s.
+- **Redis is never on a price request.** `/readyz` reports the listener's state without pinging.
+
+Also: a key can only create keys inside its own domain scope, the only working admin key can't be revoked
+(`409 last_admin_key`), and each key records who created and who revoked it.
+
 ### 4.4 Other protections
 
 - **Server-to-server only.** Keys must never ship inside a mobile app or browser — a customer could extract the key and send `occupancy: 0` to get a cheap price. The integration guide says this in bold.

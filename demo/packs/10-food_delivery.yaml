@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=../../packs/schema/pack.schema.json
+# ==================================================================================================
+# DEMO 10 - Food delivery fee: distance bands, rain and few riders added together
+#
+# Upload: admin console -> Domains -> Upload rules -> drop this file (it saves a DRAFT).
+# Then on the version page: Check -> Safety test -> Impact -> Approve (a second key) -> Publish.
+#
+# Try a price (version page -> Try a price), expected result computed by the engine:
+#   Raining, few riders, 4 km
+#     distance_km 4, rain yes, rider_supply 0.2; date Wed 14 Oct 2026, 14:30 IST  ->  INR 60.00
+#   Dry, plenty of riders, 1.5 km
+#     distance_km 1.5, rain no, rider_supply 0.6; date Wed 14 Oct 2026, 14:30 IST  ->  INR 20.00
+# ==================================================================================================
+domain: food_delivery
+currency: INR
+signals:
+  distance_km:
+    type: number
+    range: [0, 30]
+    source: request
+  rain: {type: bool, source: request, default: false}
+  rider_supply: {type: ratio, source: request, default: 0.5}
+base:
+  op: band
+  signal: distance_km
+  bands:
+  - {upto: 2, price: 20}
+  - {upto: 5, price: 35}
+  - {upto: 30, price: 60}
+groups:
+- name: conditions
+  stacking: add
+  rules:
+  - id: rain
+    when: rain
+    then: {op: pct, value: 30}
+    reason: Rain
+  - id: few-riders
+    when: rider_supply < 0.3
+    then: {op: pct, value: 40}
+    reason: Few riders nearby
+guards:
+  floor: {op: abs, value: 15}
+  ceiling: {op: abs, value: 150}
+rounding: {step: 1, mode: half_up}

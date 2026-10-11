@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=../../packs/schema/pack.schema.json
+# ==================================================================================================
+# DEMO 08 - SaaS subscription: a plan x region price table, seat tiers, annual billing discount
+#
+# Upload: admin console -> Domains -> Upload rules -> drop this file (it saves a DRAFT).
+# Then on the version page: Check -> Safety test -> Impact -> Approve (a second key) -> Publish.
+#
+# Try a price (version page -> Try a price), expected result computed by the engine:
+#   Pro, India, 25 seats, annual
+#     seats 25, plan pro, region india, annual yes; date Wed 14 Oct 2026, 14:30 IST  ->  INR 1,147.00
+#   Starter, US, 3 seats, monthly
+#     seats 3, plan starter, region us, annual no; date Wed 14 Oct 2026, 14:30 IST  ->  INR 799.00
+# ==================================================================================================
+domain: saas
+currency: INR
+signals:
+  seats:
+    type: int
+    range: [1, 100000]
+    source: request
+  plan:
+    type: enum
+    values: [starter, pro, enterprise]
+    source: request
+  region:
+    type: enum
+    values: [india, us, eu]
+    source: request
+  annual: {type: bool, source: request, default: false}
+base:
+  op: lookup_table
+  signals: [plan, region]
+  rows:
+  - key: [starter, india]
+    value: 499
+  - key: [starter, us]
+    value: 799
+  - key: [pro, india]
+    value: 1499
+  - key: [pro, us]
+    value: 2399
+  - key: [enterprise, india]
+    value: 3999
+  default: 4999
+groups:
+- name: volume
+  stacking: first_match
+  rules:
+  - id: seat-tier
+    when: seats >= 10
+    then:
+      op: tier
+      signal: seats
+      tiers:
+      - {from: 10, pct: -10}
+      - {from: 100, pct: -20}
+    reason: '{seats} seats'
+- name: billing
+  stacking: multiply
+  rules:
+  - id: annual
+    when: annual
+    then: {op: pct, value: -15}
+    reason: Annual billing
+guards:
+  floor: {op: pct_of_base, value: 50}
+  ceiling: {op: pct_of_base, value: 100}
+rounding: {step: 1, mode: half_up}

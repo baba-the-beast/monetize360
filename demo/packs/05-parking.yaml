@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=../../packs/schema/pack.schema.json
+# ==================================================================================================
+# DEMO 05 - Parking: price by hours parked, vehicle type, a nearly full lot, weekends
+#
+# Upload: admin console -> Domains -> Upload rules -> drop this file (it saves a DRAFT).
+# Then on the version page: Check -> Safety test -> Impact -> Approve (a second key) -> Publish.
+#
+# Try a price (version page -> Try a price), expected result computed by the engine:
+#   Car, 2.5 h, lot 95% full, Wednesday
+#     hours 2.5, occupancy 0.95, vehicle car; date Wed 14 Oct 2026, 14:30 IST  ->  INR 100.00
+#   SUV, all day, Saturday
+#     hours 10, occupancy 0.5, vehicle suv; date Sat 17 Oct 2026, 14:30 IST  ->  INR 390.00
+# ==================================================================================================
+domain: parking
+currency: INR
+signals:
+  hours:
+    type: number
+    range: [0, 720]
+    source: request
+  occupancy: {type: ratio, source: request, default: 0.5}
+  vehicle:
+    type: enum
+    values: [bike, car, suv]
+    source: request
+  is_weekend: {type: bool, source: public}
+base:
+  op: band
+  signal: hours
+  bands:
+  - {upto: 1, price: 40}
+  - {upto: 3, price: 80}
+  - {upto: 8, price: 150}
+  - {upto: 720, price: 250}
+groups:
+- name: adjustments
+  stacking: multiply
+  rules:
+  - id: vehicle
+    when: 'true'
+    then:
+      op: lookup_table
+      signal: vehicle
+      table: {bike: 0.5, car: 1.0, suv: 1.4}
+    reason: '{vehicle}'
+  - id: busy
+    when: occupancy > 0.9
+    then: {op: pct, value: 20}
+    reason: Lot over 90% full
+  - id: weekend
+    when: is_weekend
+    then: {op: pct, value: 10}
+    reason: Weekend
+guards:
+  floor: {op: abs, value: 10}
+  ceiling: {op: abs, value: 5000}
+rounding: {step: 10, mode: half_up}

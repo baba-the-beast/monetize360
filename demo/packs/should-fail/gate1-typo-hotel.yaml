@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=../../../packs/schema/pack.schema.json
+# ==================================================================================================
+# SHOULD FAIL - GATE 1 (schema)
+#
+# A typo: 'ceilng' instead of 'ceiling'. Without the schema, the pack would silently lose its price ceiling.
+# Expected: the upload is REFUSED at once - nothing is saved - and the error names guards/ceilng.
+# ==================================================================================================
+domain: hotel
+currency: INR
+description: Room pricing for city hotels
+
+signals:
+  occupancy:   { type: ratio, range: [0, 1], source: request, default: 0.5 }
+  is_weekend:  { type: bool, source: public }
+  festival:    { type: enum, values: [none, diwali, holi], source: public, default: none }
+
+base: { op: from_request }
+
+groups:
+  - name: demand
+    stacking: multiply
+    rules:
+      - id: high-occ
+        when: "occupancy > 0.8"
+        then: { op: pct, value: 20 }
+        reason: "Occupancy above 80%"
+      - id: weekend
+        when: "is_weekend"
+        then: { op: pct, value: 10 }
+        reason: "Weekend"
+      - id: festival
+        when: "festival != 'none'"
+        then: { op: pct, value: 25 }
+        reason: "Festival: {festival}"
+
+guards:
+  floor:      { op: pct_of_base, value: 70 }
+  ceilng:     { op: abs, value: 5000 }   # typo
+  max_change: { pct: 15, per: 1h }
+
+rounding: { step: 50, mode: half_up }

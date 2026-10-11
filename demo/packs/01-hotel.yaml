@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=../../packs/schema/pack.schema.json
+# ==================================================================================================
+# DEMO 01 - Hotel rooms: occupancy, weekends and festivals from the pack's own calendar
+#
+# Upload: admin console -> Domains -> Upload rules -> drop this file (it saves a DRAFT).
+# Then on the version page: Check -> Safety test -> Impact -> Approve (a second key) -> Publish.
+#
+# Try a price (version page -> Try a price), expected result computed by the engine:
+#   Diwali Sunday, almost full
+#     base price 3000, occupancy 0.85; date Sun 08 Nov 2026, 14:30 IST  ->  INR 4,950.00
+#   Ordinary Wednesday, half full
+#     base price 3000, occupancy 0.5; date Wed 14 Oct 2026, 14:30 IST  ->  INR 3,000.00
+# ==================================================================================================
+domain: hotel
+currency: INR
+description: Room pricing for city hotels
+
+signals:
+  occupancy:   { type: ratio, range: [0, 1], source: request, default: 0.5 }
+  is_weekend:  { type: bool, source: public }
+  festival:    { type: enum, values: [none, diwali, holi], source: public, default: none }
+
+base: { op: from_request }
+
+groups:
+  - name: demand
+    stacking: multiply
+    rules:
+      - id: high-occ
+        when: "occupancy > 0.8"
+        then: { op: pct, value: 20 }
+        reason: "Occupancy above 80%"
+      - id: weekend
+        when: "is_weekend"
+        then: { op: pct, value: 10 }
+        reason: "Weekend"
+      - id: festival
+        when: "festival != 'none'"
+        then: { op: pct, value: 25 }
+        reason: "Festival: {festival}"
+
+guards:
+  floor:      { op: pct_of_base, value: 70 }
+  ceiling:    { op: abs, value: 5000 }
+  max_change: { pct: 15, per: 1h }
+
+rounding: { step: 50, mode: half_up }

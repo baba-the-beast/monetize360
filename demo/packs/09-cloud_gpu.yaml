@@ -1,0 +1,48 @@
+# yaml-language-server: $schema=../../packs/schema/pack.schema.json
+# ==================================================================================================
+# DEMO 09 - Cloud GPU (USD): GPU type, a utilisation curve, spot discount, cent-level prices
+#
+# Upload: admin console -> Domains -> Upload rules -> drop this file (it saves a DRAFT).
+# Then on the version page: Check -> Safety test -> Impact -> Approve (a second key) -> Publish.
+#
+# Try a price (version page -> Try a price), expected result computed by the engine:
+#   A100, fleet 90% busy
+#     utilization 0.9, gpu a100; date Wed 14 Oct 2026, 14:30 IST  ->  USD 5.14
+#   T4 spot, fleet half busy
+#     utilization 0.5, gpu t4, spot yes; date Wed 14 Oct 2026, 14:30 IST  ->  USD 0.11
+# ==================================================================================================
+domain: cloud_gpu
+currency: USD
+signals:
+  utilization: {type: ratio, source: request}
+  gpu:
+    type: enum
+    values: [t4, a10, a100]
+    source: request
+  spot: {type: bool, source: request, default: false}
+base:
+  op: lookup_table
+  signal: gpu
+  table: {t4: 0.35, a10: 1.1, a100: 3.67}
+groups:
+- name: market
+  stacking: multiply
+  rules:
+  - id: scarcity
+    when: 'true'
+    then:
+      op: piecewise_curve
+      signal: utilization
+      points:
+      - [0.5, 0.8]
+      - [0.8, 1.0]
+      - [0.95, 1.6]
+    reason: Fleet {utilization} used
+  - id: spot
+    when: spot
+    then: {op: pct, value: -60}
+    reason: Spot instance
+guards:
+  floor: {op: abs, value: 0.05}
+  ceiling: {op: abs, value: 20}
+rounding: {step: 0.01, mode: half_up}

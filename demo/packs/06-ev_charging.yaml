@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=../../packs/schema/pack.schema.json
+# ==================================================================================================
+# DEMO 06 - EV charging: grid price + 40%, charger speed, time-of-day curve, member discount
+#
+# Upload: admin console -> Domains -> Upload rules -> drop this file (it saves a DRAFT).
+# Then on the version page: Check -> Safety test -> Impact -> Approve (a second key) -> Publish.
+#
+# Try a price (version page -> Try a price), expected result computed by the engine:
+#   Fast charger at 6 pm, member
+#     grid_price 8, charger dc_fast, member yes; date Wed 14 Oct 2026, 18:00 IST  ->  INR 19.50
+#   Slow charger at 3 am
+#     grid_price 8, charger ac_slow, member no; date Wed 14 Oct 2026, 03:00 IST  ->  INR 9.00
+# ==================================================================================================
+domain: ev_charging
+currency: INR
+signals:
+  grid_price:
+    type: money
+    range: [0.01, 100]
+    source: request
+  charger:
+    type: enum
+    values: [ac_slow, dc_fast, dc_ultra]
+    source: request
+  member: {type: bool, source: request, default: false}
+  hour: {type: int, source: public}
+base: {op: cost_plus, cost_signal: grid_price, margin_pct: 40}
+groups:
+- name: service
+  stacking: multiply
+  rules:
+  - id: speed
+    when: 'true'
+    then:
+      op: lookup_table
+      signal: charger
+      table: {ac_slow: 1.0, dc_fast: 1.5, dc_ultra: 2.0}
+    reason: '{charger}'
+  - id: time-of-day
+    when: 'true'
+    then:
+      op: piecewise_curve
+      signal: hour
+      points:
+      - [0, 0.8]
+      - [6, 0.8]
+      - [9, 1.0]
+      - [18, 1.3]
+      - [22, 1.3]
+      - [23, 0.9]
+    reason: Hour {hour}
+- name: loyalty
+  stacking: add
+  rules:
+  - id: member
+    when: member
+    then: {op: pct, value: -10}
+    reason: Member
+guards:
+  floor: {op: abs, value: 5}
+  ceiling: {op: abs, value: 45}
+rounding: {step: 0.5, mode: half_up}

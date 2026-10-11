@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=../../packs/schema/pack.schema.json
+# ==================================================================================================
+# DEMO 04 - Retail shelf price: cost + margin, overstock clearance vs low stock, bulk tiers, floor = 85% of base
+#
+# Upload: admin console -> Domains -> Upload rules -> drop this file (it saves a DRAFT).
+# Then on the version page: Check -> Safety test -> Impact -> Approve (a second key) -> Publish.
+#
+# Try a price (version page -> Try a price), expected result computed by the engine:
+#   Overstocked, buying 12
+#     cost 1000, inventory 600, qty 12; date Wed 14 Oct 2026, 14:30 IST  ->  INR 1,105.00
+#   Only 10 left, buying 1
+#     cost 1000, inventory 10, qty 1; date Wed 14 Oct 2026, 14:30 IST  ->  INR 1,430.00
+# ==================================================================================================
+domain: retail
+currency: INR
+signals:
+  cost:
+    type: money
+    range: [0.01, 1000000]
+    source: request
+  inventory:
+    type: int
+    range: [0, 100000]
+    source: request
+  qty:
+    type: int
+    range: [1, 1000]
+    source: request
+    default: 1
+base: {op: cost_plus, cost_signal: cost, margin_pct: 30}
+groups:
+- name: stock
+  stacking: exclusive
+  rules:
+  - id: clearance
+    when: inventory > 500
+    then: {op: pct, value: -15}
+    reason: Overstock clearance
+  - id: scarce
+    when: inventory < 20
+    then: {op: pct, value: 10}
+    reason: Low stock
+- name: volume
+  stacking: add
+  rules:
+  - id: bulk
+    when: qty >= 10
+    then:
+      op: tier
+      signal: qty
+      tiers:
+      - {from: 10, pct: -5}
+      - {from: 50, pct: -10}
+    reason: Bulk order of {qty}
+guards:
+  floor: {op: pct_of_base, value: 85}
+  ceiling: {op: pct_of_base, value: 150}
+rounding: {step: 1, mode: half_up}

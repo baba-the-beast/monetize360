@@ -14,3 +14,9 @@ bench/results/
 .env.local
 .demo-keys.json
 .audit-spool/
+
+# AI assistant instructions (kept local, excluded from repo)
+AGENTS.md
+agents.md
+CLAUDE.md
+claude.md

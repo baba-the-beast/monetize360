@@ -49,3 +49,4 @@ ignore = ["S101"]                    # allow assert in tests
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S"]
 "bench/**" = ["S311"]            # random test data for load generation, nothing secret
+"scripts/make_demo_packs.py" = ["E501"]   # exact YAML snippets the demo files must match

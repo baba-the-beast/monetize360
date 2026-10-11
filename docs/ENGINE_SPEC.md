@@ -61,7 +61,9 @@ cfs    = explain(pack, ctx, result, policy=None)                        # counte
 | `SignalStale` | stale and `on_stale: reject` | 503 |
 | `LookupMiss` | key not in table and no `default`; value above last band | 422 |
 | `ExclusiveConflict` | more than one rule fired in an `exclusive` group | 409 |
-| `InvariantViolation` | self-check failed (§8) — **a bug, never a wrong price** | 500 |
+| `BoundsConflict` | the limits for this request cross (§6.1), e.g. hotel `base_price` 8000 → floor 5600 > ceiling 5000; names both limits | 422 |
+| `RuleError` | a rule fails at runtime: `formula` arithmetic (÷0, out of range); names the rule | 500 |
+| `InvariantViolation` | **only** the self-check (§8) — an engine bug, never a wrong price, never a pack or input problem | 500 |
 
 **The engine reads no files.** It never loads `pack.schema.json`; callers (`control/schema.py`, used by
 `PUT /v1/packs`, the linter and the tests) validate the pack dict first. That keeps the engine pure and
@@ -96,7 +98,7 @@ Numeric types (`ratio`, `number`, `money`) accept a number or a numeric string, 
 `Decimal(str(x))`; `int` accepts an integer (or integer string); `bool` accepts only `true`/`false`.
 Numeric and `int` signals, and `base_price`, must satisfy `|x| ≤ 10¹²` (`MAX_ABS`) → else `SignalInvalid`
 ("too large"). This keeps every amount far inside the 28-digit context, so quantizing never fails. Any
-arithmetic error that still happens (only a pathological pack can cause one) → `InvariantViolation`,
+arithmetic error that still happens (only a pathological pack can cause one) → `RuleError`,
 never a raw exception.
 
 Public signals: `is_weekend` (Sat/Sun), `weekday` (`mon`…`sun`), `hour` (0–23), `festival`
@@ -187,7 +189,9 @@ Anything else — calls, attribute access, Python's `and`/`or`/`not` — is reje
   x's type. Comparing an enum signal with a text it can never have (`festival == 'diwaly'`) is an error.
   `when` must be true/false and `formula` must be a number.
 - The only runtime expression error left is arithmetic (e.g. division by zero in a `formula`) →
-  `InvariantViolation`.
+  `RuleError` naming the rule.
+- Number literals keep every digit (`0.80000000000000000001` is not `0.8`); they're read from the source text,
+  never through a float. Python spellings (`True`, `None`, `and`, hex `0x10`) are rejected.
 - **Implementation:** `engine/expr.py` walks Python's `ast` parse tree through a whitelist (no `eval`, no
   calls, no attributes, no loops), compiled once per pack. **cel-python was measured and rejected:** it
   computes in floats (`price * 1.1` → `3300.0000000000005`), errors on `int > double`, and took ~300 µs per
@@ -205,7 +209,7 @@ hard_lower = max( pack floor, tenant min_price, 0.01 )
 hard_upper = min( pack ceiling, tenant max_price, B × tenant max_surge_x )      # absent limits ignored
 soft       = [ ref × (1 − pct/100), ref × (1 + pct/100) ]  if max_change and reference_price, else none
 
-if hard_lower > hard_upper  → InvariantViolation (the linter should have prevented this)
+if hard_lower > hard_upper  → BoundsConflict (422), naming the two limits and the base price
 interval = soft ∩ hard   if that is non-empty
          = hard          otherwise   (hard limits always beat smoothness)
 ```
@@ -233,8 +237,12 @@ No row when nothing is clamped.
 ## 7. Rounding (`stage: round`)
 
 1. `R = P` rounded to a multiple of `step` with `mode` (`half_up` | `down` | `up`).
-2. If `ending` is set: candidates `⌊R/100⌋×100 + ending` and that ±100; pick the nearest to `R`;
-   a tie goes up.
+2. If `ending` is set, with `c = ⌊R/100⌋×100 + ending`, follow `mode`:
+   `down` → the largest of `c`, `c − 100` that is ≤ `R` (rounding down never raises a price);
+   `up` → the smallest of `c`, `c + 100` that is ≥ `R`;
+   `half_up` → the nearest of `c − 100`, `c`, `c + 100`, a tie goes up.
+   `compile_pack` rejects an `ending` the `step` can never produce (needs `100 % step == 0` and
+   `ending % step == 0`).
 3. If `R` is outside the guard interval, move to the nearest valid value (one that matches the step and
    ending) inside it. If none exists, `R = P` and add flag `rounding skipped: bounds tighter than step`.
 4. Emit `Row(step="rounding", kind="rounding", delta=R − P)` only if non-zero.
@@ -253,12 +261,14 @@ All must hold, else `InvariantViolation`:
 
 ## 9. Counterfactuals (`explain.py`)
 
-Take the fired `rule` rows, pick the **5 with the largest `|delta|`** (ties: waterfall order), and for each
+Take the fired `rule` rows, pick the **10 with the largest `|delta|`** (ties: waterfall order), and for each
 re-run `evaluate()` with `disabled_rules={rule.id}` and the **same context**:
-`{"if": "without: <reason>", "price": <new price>}`. Sort by `abs(price − result.price)` descending.
+`{"if": "without: <reason>", "price": <new price>}`. Sort by `abs(price − result.price)` descending, keep 5.
 Never compute a counterfactual by subtracting deltas.
 
-- **Bounded cost:** at most 5 re-runs however many rules fired (500 fired rules: 12 ms, not 1.1 s).
+- **Bounded cost:** at most 10 re-runs however many rules fired (500 fired rules: ~20 ms, not 1.1 s).
+- Zero-delta rows rank last but are not skipped: in a `first_match` / `max` group, switching off a chosen
+  zero-delta rule lets the next rule apply, so the price does change.
 - A re-run that raises `InvariantViolation` is re-raised — an engine bug is never hidden in an
   explanation. Other engine errors (e.g. `LookupMiss` only reachable with the rule off) skip that rule.
 

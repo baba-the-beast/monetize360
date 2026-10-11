@@ -552,6 +552,8 @@ We don't claim legal compliance (that's the customer's lawyers' call). We provid
 | Bad rule published | ✅ | Lint + verify + impact preview should stop it; guards clamp it anyway; kill switch; one-call rollback |
 | New pack fails to load | ✅ | Replica keeps last known good version, raises alert |
 | Engine bug | ✅ no wrong price | Self-check fails → `500 invariant_violation`, no price returned |
+| Pack rule fails at runtime | ✅ no wrong price | e.g. formula ÷ 0 → `500 rule_error` naming the rule; fix the pack or roll back |
+| Request outside what the pack can price | ✅ no wrong price | e.g. base too high for floor/ceiling → `422 bounds_conflict` |
 | Whole service unreachable | client-side | Client uses last price until `valid_until`, then its own fallback |
 
 ---

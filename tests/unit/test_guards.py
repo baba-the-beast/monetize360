@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from monetize360.engine import InvariantViolation, Policy, compile_pack, evaluate
+from monetize360.engine import BoundsConflict, Policy, compile_pack, evaluate
 from tests.conftest import ctx, make_pack
 
 
@@ -82,6 +82,22 @@ def test_equal_limits_name_the_hardest():
     assert last(r).step == "tenant_max"
 
 
-def test_crossing_limits_is_an_invariant_violation():
-    with pytest.raises(InvariantViolation, match="limits cross"):
+# ---------------------------------------------------------------- review #4: crossing limits = bounds_conflict (422)
+
+def test_tenant_min_above_ceiling_is_a_bounds_conflict():
+    with pytest.raises(BoundsConflict, match="tenant_min 2500.00 is above ceiling 2000.00") as e:
         evaluate(pack(), ctx(x="1"), policy=Policy(min_price=Decimal("2500")))
+    assert e.value.code == "bounds_conflict"
+
+
+def test_hotel_base_too_high_for_its_ceiling(hotel):
+    # floor = 70% of 8000 = 5600 > ceiling 5000 (any base above 7142.86 does this)
+    with pytest.raises(BoundsConflict, match="floor 5600.00 is above ceiling 5000.00 for base price 8000.00"):
+        evaluate(hotel, ctx("8000", occupancy="0.5", is_weekend=False, festival="none"))
+
+
+def test_tenant_surge_cap_below_floor(hotel):
+    # surge cap 0.5 x 3000 = 1500 < floor 2100
+    with pytest.raises(BoundsConflict, match="floor 2100.00 is above tenant_surge 1500.00"):
+        evaluate(hotel, ctx("3000", occupancy="0.5", is_weekend=False, festival="none"),
+                 policy=Policy(max_surge_x=Decimal("0.5")))

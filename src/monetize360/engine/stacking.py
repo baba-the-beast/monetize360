@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 
 from .expr import ExprError
-from .models import ExclusiveConflict, Group, InvariantViolation, Row, Rule, q
+from .models import ExclusiveConflict, Group, Row, Rule, RuleError, q
 from .operators import effect
 from .signals import show
 
@@ -30,10 +30,20 @@ def fires(rule: Rule, values: dict, as_of: datetime) -> bool:
     try:
         result = rule.when(values)
     except ExprError as e:
-        raise InvariantViolation(f"rule {rule.id}: {e}") from None
+        raise RuleError(f"rule {rule.id}: {e}", [{"path": f"rules.{rule.id}.when"}]) from None
     if not isinstance(result, bool):
-        raise InvariantViolation(f"rule {rule.id}: condition returned {result!r}, not true/false")
+        raise RuleError(f"rule {rule.id}: condition returned {result!r}, not true/false",
+                        [{"path": f"rules.{rule.id}.when"}])
     return result
+
+
+def rule_delta(rule: Rule, price: Decimal, values: dict) -> Decimal:
+    """The rule's money change applied to `price`. Pack arithmetic failures name the rule (RuleError)."""
+    try:
+        return delta(rule.then.kind, effect(rule.then, price, values), price)
+    except (ExprError, DecimalException) as e:
+        why = str(e) if isinstance(e, ExprError) else f"arithmetic out of range ({type(e).__name__})"
+        raise RuleError(f"rule {rule.id}: {why}", [{"path": f"rules.{rule.id}.then"}]) from None
 
 
 def reason(rule: Rule, values: dict) -> str:
@@ -62,18 +72,17 @@ def apply_group(group: Group, price: Decimal, values: dict, as_of: datetime,
 
     if group.stacking == "multiply":
         for r in fired:
-            emit(r, delta(r.then.kind, effect(r.then, price, values), price))
+            emit(r, rule_delta(r, price, values))
     elif group.stacking == "add":
         for r in fired:
-            emit(r, delta(r.then.kind, effect(r.then, start, values), start))
+            emit(r, rule_delta(r, start, values))
     elif group.stacking == "max":
         best = None
         for r in fired:
-            d = delta(r.then.kind, effect(r.then, start, values), start)
+            d = rule_delta(r, start, values)
             if best is None or d > best[1]:
                 best = (r, d)
         emit(*best)
     else:  # first_match, or exclusive with exactly one fired rule
-        r = fired[0]
-        emit(r, delta(r.then.kind, effect(r.then, start, values), start))
+        emit(fired[0], rule_delta(fired[0], start, values))
     return rows, price

@@ -166,6 +166,28 @@ def test_wrongly_typed_rule_never_publishes(when):
     assert e.value.details[0]["path"] == "groups/0/rules/2/when"
 
 
+# -------------------------------- review #4: pack failures = rule_error, naming the rule
+
+def test_formula_division_by_zero_is_a_rule_error_naming_the_rule():
+    from monetize360.engine import RuleError
+    pack = compile_pack(make_pack([{"name": "g", "stacking": "multiply", "rules": [
+        {"id": "risky", "when": "true", "then": {"op": "formula", "expr": "price / (x - 2)"}, "reason": "r"}]}]))
+    assert evaluate(pack, ctx(x="4")).price == Decimal("500.00")
+    with pytest.raises(RuleError, match="rule risky: arithmetic error") as e:
+        evaluate(pack, ctx(x="2"))
+    assert e.value.code == "rule_error" and e.value.details == [{"path": "rules.risky.then"}]
+
+
+def test_self_check_failure_is_still_an_invariant_violation():
+    from monetize360.engine import InvariantViolation, Result, Row
+    from monetize360.engine.evaluate import self_check
+    bad = Result(price=Decimal("101.00"), currency="INR", flags=(), signals_used={},
+                 waterfall=(Row("base", "base", Decimal("100.00"), Decimal("100.00"), "b"),),
+                 bounds={"lower": Decimal("1.00"), "upper": Decimal("1000.00")})
+    with pytest.raises(InvariantViolation, match="self-check failed"):
+        self_check(bad)
+
+
 def test_formula_must_produce_a_number():
     with pytest.raises(PackInvalid, match="pack is invalid"):
         compile_pack(make_pack([{"name": "g", "stacking": "multiply", "rules": [

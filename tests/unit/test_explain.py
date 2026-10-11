@@ -1,5 +1,6 @@
 """Counterfactuals (ENGINE_SPEC §9): real re-runs, bounded cost, engine bugs never hidden."""
 import sys
+from decimal import Decimal
 
 import pytest
 
@@ -28,7 +29,7 @@ def test_cost_is_bounded_however_many_rules_fire(monkeypatch):
     real = explain_module.evaluate
     monkeypatch.setattr(explain_module, "evaluate", lambda *a, **k: calls.append(1) or real(*a, **k))
     cfs = explain(pack, c, result)
-    assert len(calls) == 5                                          # was 200 re-runs
+    assert len(calls) == 10                                         # was 200 re-runs
     assert [cf["if"] for cf in cfs] == [f"without: +{i}" for i in (200, 199, 198, 197, 196)]   # biggest first
 
 
@@ -41,6 +42,15 @@ def test_engine_bug_in_a_rerun_is_not_hidden(monkeypatch, hotel):
     monkeypatch.setattr(explain_module, "evaluate", broken)
     with pytest.raises(InvariantViolation):
         explain(hotel, c, result)
+
+
+def test_zero_delta_rule_in_first_match_still_explained():
+    # "free" (+0) is chosen by first_match; without it, "surge" (+100) applies -> the price DOES change
+    rules = [{"id": "free", "when": "true", "then": {"op": "abs", "value": 0}, "reason": "Promo: no surge"},
+             {"id": "surge", "when": "true", "then": {"op": "abs", "value": 100}, "reason": "Surge"}]
+    pack = compile_pack(make_pack([{"name": "g", "stacking": "first_match", "rules": rules}]))
+    c = ctx()
+    assert explain(pack, c, evaluate(pack, c)) == [{"if": "without: Promo: no surge", "price": Decimal("1100.00")}]
 
 
 def test_no_rules_fired_no_counterfactuals(hotel):

@@ -33,6 +33,7 @@ from .signals import NUMERIC, coerce
 _DURATION = re.compile(r"([1-9][0-9]*)(s|m|h|d)")
 _UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
 _PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
+MAX_RULES = 500          # whole pack; caps worst-case work per price (PACK_SCHEMA size limits)
 FACTOR_OPS = {"pct", "multiplier", "lookup_table", "band", "piecewise_curve", "tier"}
 NUMERIC_SIGNAL_OPS = {"band", "piecewise_curve", "tier", "cost_plus", "competitor_rel"}
 EXPR_TYPE = {"ratio": NUM, "number": NUM, "money": NUM, "int": NUM, "bool": BOOL, "enum": STR}
@@ -97,6 +98,9 @@ class _Compiler:
                 rules.append(rule)
             rules.sort(key=lambda r: -r.priority)          # stable: equal priorities keep file order
             groups.append(Group(g["name"], g["stacking"], tuple(rules)))
+        total = sum(len(g["rules"]) for g in p["groups"])
+        if total > MAX_RULES:
+            self.bad("groups", f"{total} rules in the pack; the limit is {MAX_RULES}")
 
         return CompiledPack(
             domain=p["domain"], currency=p["currency"], timezone=tz, signals=self.signals, base=base,
@@ -287,4 +291,9 @@ class _Compiler:
         step = D(r["step"])
         if step <= 0 or step % CENT != 0:
             self.bad("rounding/step", "step must be a positive multiple of 0.01")
-        return Rounding(step, r["mode"], r.get("ending"))
+        ending = r.get("ending")
+        if ending is not None and step > 0 and (100 % step != 0 or ending % step != 0):
+            # e.g. step 50 + ending 99: no multiple of 50 ends in 99, so prices would break the step
+            self.bad("rounding/ending", f"ending {ending:02d} is unreachable with step {step} "
+                                        "(need 100 % step == 0 and ending % step == 0)")
+        return Rounding(step, r["mode"], ending)

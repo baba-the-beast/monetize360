@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import DecimalException, localcontext
 
 from .guards import clamp, interval
-from .models import DEC, CompiledPack, Context, InvariantViolation, Policy, Result, Row, SignalInvalid, q
+from .models import DEC, CompiledPack, Context, InvariantViolation, Policy, Result, Row, RuleError, SignalInvalid, q
 from .operators import base_price
 from .rounding import round_price
 from .signals import resolve
@@ -19,8 +19,9 @@ def evaluate(pack: CompiledPack, ctx: Context, policy: Policy | None = None,
     try:
         return _evaluate(pack, ctx, policy, disabled_rules)
     except DecimalException as e:
-        # inputs are capped (MAX_ABS), so this needs a pathological pack (e.g. 500 x "+1000%"): never a raw crash
-        raise InvariantViolation(f"price arithmetic out of range ({type(e).__name__})") from None
+        # inputs are capped (MAX_ABS) and rule arithmetic is caught per rule, so only an absurd pack number
+        # (e.g. a base band price of 1e30) gets here: a pack problem, never a raw crash
+        raise RuleError(f"price arithmetic out of range ({type(e).__name__}): check the pack's numbers") from None
 
 
 def _evaluate(pack: CompiledPack, ctx: Context, policy: Policy | None, disabled_rules: frozenset[str]) -> Result:

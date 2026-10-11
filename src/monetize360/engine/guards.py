@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from .models import CENT, Guards, InvariantViolation, Limit, Policy, Row, q
+from .models import CENT, BoundsConflict, Guards, Limit, Policy, Row, q
 
 
 @dataclass
@@ -46,12 +46,12 @@ def interval(guards: Guards, base: Decimal, policy: Policy | None,
     lower.append(("floor", floor, _describe("Floor", guards.floor, floor)))
     upper.append(("ceiling", ceiling, _describe("Ceiling", guards.ceiling, ceiling)))
 
-    hard_lo = max(v for _, v, _ in lower)
-    hard_hi = min(v for _, v, _ in upper)
+    lo_name, hard_lo, _ = max(lower, key=lambda lim: lim[1])
+    hi_name, hard_hi, _ = min(upper, key=lambda lim: lim[1])
     if hard_lo > hard_hi:
-        raise InvariantViolation(
-            f"limits cross: lower {hard_lo} > upper {hard_hi}",
-            [{"path": "guards", "value": {"lower": str(hard_lo), "upper": str(hard_hi)}}])
+        raise BoundsConflict(
+            f"no valid price: {lo_name} {hard_lo} is above {hi_name} {hard_hi} for base price {base}",
+            [{"path": "guards", "value": {lo_name: str(hard_lo), hi_name: str(hard_hi), "base_price": str(base)}}])
 
     result = Interval(hard_lo, hard_hi, lower, upper)
     if guards.max_change_pct is not None and reference is not None:

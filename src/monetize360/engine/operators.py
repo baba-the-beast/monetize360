@@ -67,12 +67,10 @@ def tier(adj: Adjustment, values: dict) -> Decimal:
 
 
 def formula(adj: Adjustment, values: dict, price: Decimal) -> Decimal:
-    try:
-        result = adj.expr({**values, "price": price})
-    except ExprError as e:
-        raise InvariantViolation(f"formula failed: {e}") from None
+    """ExprError propagates: stacking turns it into a RuleError that names the rule."""
+    result = adj.expr({**values, "price": price})
     if isinstance(result, bool) or not isinstance(result, (Decimal, int)):
-        raise InvariantViolation(f"formula '{adj.expr.source}' returned {result!r}, not a number")
+        raise ExprError(f"formula '{adj.expr.source}' returned {result!r}, not a number")
     return Decimal(result)
 
 

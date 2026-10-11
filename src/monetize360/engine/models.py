@@ -54,7 +54,18 @@ class ExclusiveConflict(EngineError):
     code = "exclusive_conflict"
 
 
+class BoundsConflict(EngineError):
+    """The limits for THIS request cross (e.g. base_price 8000 -> floor 70% = 5600 > ceiling 5000). HTTP 422."""
+    code = "bounds_conflict"
+
+
+class RuleError(EngineError):
+    """A pack rule fails at runtime (formula divides by zero, arithmetic out of range). Names the rule. HTTP 500."""
+    code = "rule_error"
+
+
 class InvariantViolation(EngineError):
+    """The self-check failed: a bug in the ENGINE, never a pack or input problem. HTTP 500."""
     code = "invariant_violation"
 
 

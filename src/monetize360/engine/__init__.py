@@ -4,12 +4,13 @@ Frozen during the demo.
 Public API (docs/ENGINE_SPEC.md §1) - export exactly these:
     compile_pack, evaluate, explain, Context, Policy, Result, Row,
     EngineError, PackInvalid, SignalInvalid, SignalMissing, SignalStale,
-    LookupMiss, ExclusiveConflict, InvariantViolation
+    LookupMiss, ExclusiveConflict, BoundsConflict, RuleError, InvariantViolation
 """
 from .compiler import compile_pack
 from .evaluate import evaluate
 from .explain import explain
 from .models import (
+    BoundsConflict,
     Context,
     EngineError,
     ExclusiveConflict,
@@ -19,6 +20,7 @@ from .models import (
     Policy,
     Result,
     Row,
+    RuleError,
     SignalInvalid,
     SignalMissing,
     SignalStale,
@@ -27,5 +29,5 @@ from .models import (
 __all__ = [
     "compile_pack", "evaluate", "explain", "Context", "Policy", "Result", "Row",
     "EngineError", "PackInvalid", "SignalInvalid", "SignalMissing", "SignalStale",
-    "LookupMiss", "ExclusiveConflict", "InvariantViolation",
+    "LookupMiss", "ExclusiveConflict", "BoundsConflict", "RuleError", "InvariantViolation",
 ]

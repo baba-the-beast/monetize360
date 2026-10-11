@@ -15,9 +15,14 @@ def _to_step(x: Decimal, step: Decimal, mode: str) -> Decimal:
     return (x / step).quantize(Decimal(1), rounding=mode) * step
 
 
-def _with_ending(r: Decimal, ending: int) -> Decimal:
-    """Nearest of ⌊r/100⌋×100 + ending and that ±100; a tie goes up."""
+def _with_ending(r: Decimal, ending: int, mode: str) -> Decimal:
+    """Apply the ending in the direction `mode` promises: down -> largest ending <= r (never raises the price),
+    up -> smallest ending >= r, half_up -> nearest of ⌊r/100⌋×100 + ending and that ±100, a tie goes up."""
     c = _to_step(r, _HUNDRED, ROUND_FLOOR) + ending
+    if mode == "down":
+        return c if c <= r else c - _HUNDRED
+    if mode == "up":
+        return c if c >= r else c + _HUNDRED
     best = None
     for cand in (c - _HUNDRED, c, c + _HUNDRED):
         if best is None or abs(cand - r) < abs(best - r) or (abs(cand - r) == abs(best - r) and cand > best):
@@ -47,7 +52,7 @@ def round_price(price: Decimal, rounding: Rounding, lower: Decimal, upper: Decim
     """Returns (rounded price, flag or None)."""
     r = _to_step(price, rounding.step, _MODES[rounding.mode])
     if rounding.ending is not None:
-        r = _with_ending(r, rounding.ending)
+        r = _with_ending(r, rounding.ending, rounding.mode)
     if r > upper:
         r = _valid_at_most(upper, rounding)
     elif r < lower:

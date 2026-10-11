@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import ast
 import re
-from decimal import Decimal, DecimalException
+from decimal import Decimal, DecimalException, InvalidOperation
 from typing import Any, Callable, Mapping
 
 # expression types
@@ -25,7 +25,7 @@ class ExprError(Exception):
 
 _TOKENS = re.compile(
     r"""'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|&&|\|\||!=|!"""
-    r"""|\b(?:true|false|null|and|or|not|is|if|else|lambda|for|import)\b"""
+    r"""|\b(?:true|false|null|True|False|None|and|or|not|is|if|else|lambda|for|import)\b"""
 )
 _CEL_TO_PY = {"&&": " and ", "||": " or ", "!=": "!=", "!": " not ",
               "true": "True", "false": "False", "null": "None"}
@@ -58,14 +58,15 @@ def compile_expr(source: str, types: Mapping[str, str], *, enums: Mapping[str, t
             return tok
         if tok in _CEL_TO_PY:
             return _CEL_TO_PY[tok]
-        raise ExprError(f"'{tok}' is not CEL — use &&, ||, ! and true/false")
+        raise ExprError(f"'{tok}' is not CEL — use &&, ||, ! and true/false/null")
 
+    py_source = _TOKENS.sub(translate, source).strip()
     try:
-        tree = ast.parse(_TOKENS.sub(translate, source).strip(), mode="eval")
+        tree = ast.parse(py_source, mode="eval")
     except SyntaxError as e:
         raise ExprError(f"syntax error in '{source}': {e.msg}") from None
     names: set[str] = set()
-    fn, typ = _Builder(types, enums or {}, names).build(tree.body)
+    fn, typ = _Builder(types, enums or {}, names, py_source).build(tree.body)
     if result is not None and typ != result:
         raise ExprError(f"'{source}' gives {typ}, but {result} is needed")
     return Expr(source, fn, frozenset(names), typ)
@@ -136,8 +137,9 @@ _ARITH: dict[type, Callable[[Decimal, Decimal], Decimal]] = {
 # ---------------------------------------------------------------- compiler: whitelist + types
 
 class _Builder:
-    def __init__(self, types: Mapping[str, str], enums: Mapping[str, tuple[str, ...]], names: set[str]):
-        self.types, self.enums, self.names = types, enums, names
+    def __init__(self, types: Mapping[str, str], enums: Mapping[str, tuple[str, ...]], names: set[str],
+                 source: str):
+        self.types, self.enums, self.names, self.source = types, enums, names, source
 
     def build(self, node: ast.AST) -> tuple[Fn, str]:
         method = getattr(self, f"_{type(node).__name__}", None)
@@ -159,7 +161,12 @@ class _Builder:
         if v is None:
             return (lambda env: None), NULL
         if isinstance(v, (int, float)):
-            d = Decimal(str(v))
+            # Read the digits from the source text, never via float: 0.80000000000000000001 must stay itself.
+            text = ast.get_source_segment(self.source, node) or ""
+            try:
+                d = Decimal(text)
+            except InvalidOperation:
+                raise ExprError(f"number {text!r} must be written in decimal, e.g. 0.8 or 1e3") from None
             return (lambda env: d), NUM
         raise ExprError(f"unsupported literal {v!r}")
 

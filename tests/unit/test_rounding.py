@@ -35,6 +35,17 @@ def test_endings(price, ending, expected):
     assert r(price, "1", ending=ending) == (Decimal(expected), None)
 
 
+@pytest.mark.parametrize("price, mode, expected", [
+    ("6150.40", "down", "6099"),     # review #8: used to give 6199 - "down" must never raise the price
+    ("6199.00", "down", "6199"),
+    ("6100.00", "up", "6199"),
+    ("6199.50", "up", "6299"),       # step-rounded up to 6200 first, then the next ...99 above it
+    ("6150.40", "half_up", "6199"),  # nearest (49.60 away vs 51.40)
+])
+def test_ending_follows_mode(price, mode, expected):
+    assert r(price, "1", mode, ending=99) == (Decimal(expected), None)
+
+
 def test_rounding_never_crosses_the_ceiling():
     assert r("4990", "50", bounds=(Decimal("1000"), Decimal("4980"))) == (Decimal("4950"), None)
 

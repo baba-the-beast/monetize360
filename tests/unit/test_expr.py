@@ -149,3 +149,22 @@ def test_required_result_type(src, result):
 def test_division_by_zero_is_a_runtime_error():
     with pytest.raises(ExprError, match="DivisionByZero"):
         run("price / 0", price=Decimal(1))
+
+
+# ---------------------------------------------------------------- review #7, #10
+
+def test_number_literals_keep_every_digit():
+    # through float, 0.80000000000000000001 became 0.8 and this comparison came out wrong
+    assert run("x > 0.80000000000000000001", x=Decimal("0.8")) is False
+    assert run("x > 0.80000000000000000001", x=Decimal("0.80000000000000000002")) is True
+
+
+@pytest.mark.parametrize("src", ["True", "is_weekend == False", "x == None", "0x10 > x"])
+def test_python_only_spellings_are_rejected(src):
+    with pytest.raises(ExprError):
+        compile_expr(src, SIGNALS)
+
+
+def test_text_in_text_is_rejected():
+    with pytest.raises(ExprError, match="'in' needs a list"):
+        compile_expr("'a' in festival", SIGNALS)

@@ -188,6 +188,7 @@ monetize360/
     ├── PACK_SCHEMA.md            pack format
     ├── BUILD_GUIDE.md            team split, milestones, tester checklist
     ├── PROMPTS.md                ready-made AI prompts per person
+    ├── REVIEW-engine-2026-10-11.md  engine review of main @ e5867a0 (findings #1–#12)
     └── TECH_STACK.md             this file
 ```
 

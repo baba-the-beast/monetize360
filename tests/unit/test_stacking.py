@@ -101,3 +101,28 @@ def test_duplicate_rule_ids_rejected():
 def test_reason_placeholders_are_filled(hotel):
     r = priced(hotel)
     assert r.waterfall[-1].reason == "Festival: diwali"
+
+
+# -------------------------------- review #11: enforced at compile until the linter exists
+
+@pytest.mark.parametrize("step, ending, ok", [(50, 99, False), (1, 99, True), (50, 50, True), (10, 90, True),
+                                              (30, 90, False), (50, 0, True)])
+def test_ending_must_be_reachable_with_step(step, ending, ok):
+    pack = make_pack([{"name": "g", "stacking": "multiply", "rules": [
+        {"id": "r", "when": "true", "then": {"op": "pct", "value": 1}, "reason": "r"}]}],
+        rounding={"step": step, "mode": "half_up", "ending": ending})
+    if ok:
+        compile_pack(pack)
+    else:
+        with pytest.raises(PackInvalid) as e:
+            compile_pack(pack)
+        assert e.value.details[0]["path"] == "rounding/ending"
+
+
+def test_more_than_500_rules_rejected():
+    rules = [{"id": f"r{i}", "when": "true", "then": {"op": "pct", "value": 0}, "reason": "r"} for i in range(200)]
+    groups = [{"name": f"g{j}", "stacking": "multiply",
+               "rules": [dict(r, id=f"{r['id']}-{j}") for r in rules]} for j in range(3)]     # 600 rules
+    with pytest.raises(PackInvalid) as e:
+        compile_pack(make_pack(groups))
+    assert "600 rules in the pack; the limit is 500" in e.value.details[0]["message"]

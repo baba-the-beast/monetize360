@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation, localcontext
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .expr import ExprError, compile_expr
+from .expr import BOOL, NUM, STR, ExprError, compile_expr
 from .models import (
     CENT,
     DEC,
@@ -35,6 +35,7 @@ _UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
 _PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
 FACTOR_OPS = {"pct", "multiplier", "lookup_table", "band", "piecewise_curve", "tier"}
 NUMERIC_SIGNAL_OPS = {"band", "piecewise_curve", "tier", "cost_plus", "competitor_rel"}
+EXPR_TYPE = {"ratio": NUM, "number": NUM, "money": NUM, "int": NUM, "bool": BOOL, "enum": STR}
 
 
 def D(x: Any) -> Decimal:
@@ -152,6 +153,32 @@ class _Compiler:
             return None
         return timedelta(**{_UNITS[m.group(2)]: int(m.group(1))})
 
+    def expr_types(self) -> dict[str, str]:
+        return {n: EXPR_TYPE[s.type] for n, s in self.signals.items()}
+
+    def enums(self) -> dict[str, tuple[str, ...]]:
+        return {n: s.values for n, s in self.signals.items() if s.type == "enum"}
+
+    def table_key(self, signal: str, raw: Any, path: str) -> str:
+        """Normalise a lookup key the way the signal's VALUE will be normalised, so "0.50" matches 0.5.
+        A key the signal can never take is a typo, not a table row."""
+        spec = self.signals.get(signal)
+        if spec is None:
+            return key_of(raw)
+        if spec.type in NUMERIC or spec.type == "int":
+            try:
+                return key_of(D(raw))
+            except InvalidOperation:
+                self.bad(path, f"key {raw!r} is not a number, but {signal} is numeric")
+        elif spec.type == "bool":
+            k = key_of(raw)
+            if k not in ("true", "false"):
+                self.bad(path, f"key {raw!r} can never match true/false signal {signal}")
+            return k
+        elif spec.type == "enum" and key_of(raw) not in spec.values:
+            self.bad(path, f"key {raw!r} can never match: {signal} is one of {', '.join(spec.values)}")
+        return key_of(raw)
+
     def need_signal(self, name: str, path: str, numeric: bool = False) -> None:
         spec = self.signals.get(name)
         if spec is None:
@@ -191,13 +218,14 @@ class _Compiler:
         if op == "lookup_table":
             default = D(a["default"]) if "default" in a else None
             if "table" in a:
-                table = {key_of(k): D(v) for k, v in a["table"].items()}
+                table = {self.table_key(a["signal"], k, f"{path}/table/{k}"): D(v) for k, v in a["table"].items()}
                 return Adjustment(op, kind, signal=a["signal"], table=table, default=default)
             table = {}
             for i, row in enumerate(a["rows"]):
                 if len(row["key"]) != len(a["signals"]):
                     self.bad(f"{path}/rows/{i}/key", f"key needs {len(a['signals'])} values")
-                table[tuple(key_of(k) for k in row["key"])] = D(row["value"])
+                table[tuple(self.table_key(sig, k, f"{path}/rows/{i}/key")
+                            for sig, k in zip(a["signals"], row["key"], strict=False))] = D(row["value"])
             return Adjustment(op, kind, signals=tuple(a["signals"]), table=table, default=default)
         if op == "piecewise_curve":
             points = sorted(((D(x), D(f)) for x, f in a["points"]), key=lambda p: p[0])
@@ -209,7 +237,7 @@ class _Compiler:
             return Adjustment(op, kind, signal=a["signal"], tiers=tuple(tiers))
         if op == "formula":
             try:
-                expr = compile_expr(a["expr"], set(self.signals) | {"price"})
+                expr = compile_expr(a["expr"], {**self.expr_types(), "price": NUM}, enums=self.enums(), result=NUM)
             except ExprError as e:
                 self.bad(f"{path}/expr", str(e))
                 expr = None
@@ -221,7 +249,7 @@ class _Compiler:
 
     def rule(self, r: Mapping[str, Any], path: str) -> Rule | None:
         try:
-            when = compile_expr(r["when"], set(self.signals))
+            when = compile_expr(r["when"], self.expr_types(), enums=self.enums(), result=BOOL)
         except ExprError as e:
             self.bad(f"{path}/when", str(e))
             when = None

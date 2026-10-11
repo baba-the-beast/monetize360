@@ -132,3 +132,41 @@ def test_expression_semantics(when, x, fires):
                                     "rules": [{"id": "r", "when": when, "then": {"op": "pct", "value": 10},
                                                "reason": "r"}]}]))
     assert (evaluate(pack, ctx(x=x)).price == Decimal("1100.00")) is fires
+
+
+# ---------------------------------------------------------------- review fixes: typed keys, typed rules
+
+def test_numeric_table_key_written_as_text_still_matches():
+    # "0.50" in YAML is a string; x = 0.5 used to miss it silently and fall back to the default
+    assert price_with({"op": "lookup_table", "signal": "x", "table": {"0.50": 2}, "default": 1}, x="0.5") \
+        == Decimal("2000.00")
+
+
+@pytest.mark.parametrize("signals, table, why", [
+    ({"x": {"type": "number", "source": "request"}}, {"half": 2}, "not a number"),
+    ({"c": {"type": "enum", "values": ["eco", "biz"], "source": "request"}}, {"ecco": 2}, "can never match"),
+    ({"b": {"type": "bool", "source": "request"}}, {"yes": 2}, "can never match"),
+])
+def test_table_key_that_can_never_match_is_rejected(signals, table, why):
+    signal = next(iter(signals))
+    with pytest.raises(PackInvalid) as e:
+        compile_pack(make_pack([{"name": "g", "stacking": "multiply", "rules": [
+            {"id": "r", "when": "true", "then": {"op": "lookup_table", "signal": signal, "table": table},
+             "reason": "r"}]}], signals=signals))
+    assert why in e.value.details[0]["message"]
+
+
+@pytest.mark.parametrize("when", ["festival > 3", "festival == 3", "festival == 'diwaly'", "occupancy + 1"])
+def test_wrongly_typed_rule_never_publishes(when):
+    from tests.conftest import load_pack
+    pack = load_pack("hotel.yaml")
+    pack["groups"][0]["rules"][2]["when"] = when
+    with pytest.raises(PackInvalid) as e:
+        compile_pack(pack)
+    assert e.value.details[0]["path"] == "groups/0/rules/2/when"
+
+
+def test_formula_must_produce_a_number():
+    with pytest.raises(PackInvalid, match="pack is invalid"):
+        compile_pack(make_pack([{"name": "g", "stacking": "multiply", "rules": [
+            {"id": "r", "when": "true", "then": {"op": "formula", "expr": "x > 1"}, "reason": "r"}]}]))

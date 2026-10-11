@@ -6,7 +6,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from .models import CompiledPack, Context, SignalInvalid, SignalMissing, SignalSpec, SignalStale
+from .models import MAX_ABS, CompiledPack, Context, SignalInvalid, SignalMissing, SignalSpec, SignalStale
 from .publicsignals import compute
 
 NUMERIC = {"ratio", "number", "money"}
@@ -52,6 +52,9 @@ def coerce(spec: SignalSpec, raw: Any) -> Any:
             raise bad(f"must be one of {', '.join(spec.values)}")
         v = raw
 
+    if t in NUMERIC or t == "int":
+        if abs(v) > MAX_ABS:
+            raise bad(f"is too large (limit {MAX_ABS})")
     if spec.range is not None:
         lo, hi = spec.range
         if not lo <= v <= hi:

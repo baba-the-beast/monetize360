@@ -13,7 +13,7 @@ from monetize360.engine import (
     compile_pack,
     evaluate,
 )
-from tests.conftest import WEDNESDAY, ctx, make_pack
+from tests.conftest import WEDNESDAY, ctx, load_pack, make_pack
 
 DIWALI_EVENING_IST = datetime(2026, 11, 8, 13, 0, tzinfo=timezone.utc)   # 18:30 in Asia/Kolkata, a Sunday
 
@@ -146,3 +146,25 @@ def test_redis_signal_cannot_be_forged_in_request():
 def test_naive_as_of_is_rejected(hotel):
     with pytest.raises(SignalInvalid, match="timezone"):
         evaluate(hotel, ctx("3000", as_of=datetime(2026, 10, 14, 9, 0), occupancy="0.5"))
+
+
+# ---------------------------------------------------------------- review fix: huge numbers are a clean 422
+
+@pytest.mark.parametrize("base", ["1e30", "1000000000001"])
+def test_huge_base_price_is_invalid_input_not_a_crash(hotel, base):
+    with pytest.raises(SignalInvalid, match="base_price is too large"):
+        evaluate(hotel, ctx(base, occupancy="0.5", is_weekend=False, festival="none"))
+
+
+def test_huge_numeric_signal_is_invalid_input():
+    pack = compile_pack(make_pack([{"name": "g", "stacking": "multiply", "rules": [
+        {"id": "r", "when": "x > 1", "then": {"op": "pct", "value": 1}, "reason": "r"}]}]))
+    with pytest.raises(SignalInvalid, match="x is too large"):
+        evaluate(pack, ctx(x="1e30"))
+
+
+def test_largest_allowed_base_price_works(hotel):
+    p = compile_pack({**load_pack("hotel.yaml"),
+                      "guards": {"floor": {"op": "abs", "value": 1}, "ceiling": {"op": "abs", "value": 2e12}}})
+    assert evaluate(p, ctx("1000000000000", occupancy="0.5", is_weekend=False, festival="none")).price \
+        == Decimal("1000000000000.00")

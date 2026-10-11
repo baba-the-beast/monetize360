@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from .expr import ExprError
-from .models import Adjustment, Context, InvariantViolation, LookupMiss, SignalInvalid, SignalMissing
+from .models import MAX_ABS, Adjustment, Context, InvariantViolation, LookupMiss, SignalInvalid, SignalMissing
 from .signals import show
 
 
@@ -107,6 +107,8 @@ def base_price(adj: Adjustment, ctx: Context, values: dict) -> tuple[Decimal, st
             raise SignalInvalid("base_price must be a number", [{"path": "base_price", "value": raw}]) from None
         if not b.is_finite() or b <= 0:
             raise SignalInvalid("base_price must be greater than 0", [{"path": "base_price", "value": raw}])
+        if b > MAX_ABS:
+            raise SignalInvalid(f"base_price is too large (limit {MAX_ABS})", [{"path": "base_price", "value": raw}])
         return b, "Base price"
     if op == "set":
         return adj.value, "Fixed base price"

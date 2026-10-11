@@ -10,6 +10,8 @@ from typing import Any, Callable
 
 DEC = decimal.Context(prec=28, rounding=ROUND_HALF_UP)   # fixed local context — never the global one
 CENT = Decimal("0.01")
+MAX_ABS = Decimal(10) ** 12      # largest accepted base price / numeric signal: keeps every amount well inside
+                                 # the 28-digit context, so quantizing to 0.01 can never fail (ENGINE_SPEC §2)
 
 
 def q(x: Decimal) -> Decimal:

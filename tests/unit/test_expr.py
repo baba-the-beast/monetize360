@@ -5,13 +5,14 @@ from decimal import Decimal
 
 import pytest
 
-from monetize360.engine.expr import ExprError, compile_expr
+from monetize360.engine.expr import BOOL, NUM, STR, ExprError, compile_expr
 
-SIGNALS = {"x", "occupancy", "festival", "is_weekend", "price"}
+SIGNALS = {"x": NUM, "occupancy": NUM, "festival": STR, "is_weekend": BOOL, "price": NUM}
+ENUMS = {"festival": ("none", "diwali", "holi", "rock && roll!", "x")}
 
 
 def run(src: str, **env):
-    return compile_expr(src, SIGNALS)(env)
+    return compile_expr(src, SIGNALS, enums=ENUMS)(env)
 
 
 # ---------------------------------------------------------------- attacks are rejected at compile time
@@ -78,7 +79,7 @@ def test_only_declared_names_are_visible():
 def test_operators_inside_strings_are_left_alone():
     # '&&', '!' and 'and' inside a string literal are data, not syntax
     assert run("festival == 'rock && roll!'", festival="rock && roll!") is True
-    assert run("festival != 'salt and pepper'", festival="x") is True
+    assert run("festival != 'rock && roll!'", festival="x") is True
 
 
 def test_evaluation_never_reaches_python_objects():
@@ -115,12 +116,36 @@ def test_formula_math_is_exact_decimal():
     assert run("(price - 100) / 3", price=Decimal("400")) == Decimal(100)
 
 
-@pytest.mark.parametrize("src, env", [
-    ("x > 'a'", {"x": Decimal(1)}),          # ordering different types
-    ("x + 'a'", {"x": Decimal(1)}),          # arithmetic on a string
-    ("is_weekend && x", {"is_weekend": True, "x": Decimal(1)}),   # && needs true/false
-    ("price / 0", {"price": Decimal(1)}),    # division by zero
+# ---------------------------------------------------------------- type errors are caught at COMPILE time
+
+@pytest.mark.parametrize("src, why", [
+    ("festival > 3", "can't order"),                  # text vs number: used to compile, then fail every request
+    ("festival == 3", "can't compare"),               # used to compile and silently never fire
+    ("x == 'high'", "can't compare"),
+    ("x > 'a'", "can't order"),
+    ("is_weekend > false", "can't order"),            # true/false has no order
+    ("x + 'a'", "arithmetic needs number"),
+    ("festival * 2", "arithmetic needs number"),
+    ("is_weekend && x", "needs true/false"),
+    ("!x", "needs true/false"),
+    ("-festival", "needs number"),
+    ("x in ['a', 'b']", "'in' needs a list of number"),
+    ("[1, 'a'] == [1]", "mixes"),
+    ("festival == 'diwaly'", "festival is never 'diwaly'"),       # enum typo
+    ("festival in ['diwali', 'eid']", "festival is never 'eid'"),
+    ("x == null", "can't compare"),
 ])
-def test_runtime_type_errors_raise(src, env):
-    with pytest.raises(ExprError):
-        run(src, **env)
+def test_type_errors_are_rejected_at_compile_time(src, why):
+    with pytest.raises(ExprError, match=why):
+        compile_expr(src, SIGNALS, enums=ENUMS)
+
+
+@pytest.mark.parametrize("src, result", [("x + 1", BOOL), ("is_weekend", NUM)])
+def test_required_result_type(src, result):
+    with pytest.raises(ExprError, match="is needed"):
+        compile_expr(src, SIGNALS, result=result)
+
+
+def test_division_by_zero_is_a_runtime_error():
+    with pytest.raises(ExprError, match="DivisionByZero"):
+        run("price / 0", price=Decimal(1))

@@ -94,6 +94,10 @@ For each declared signal, in this order:
 Then validate: type, `range` (inclusive), `values`. Undeclared keys in `ctx.signals` → `SignalInvalid`.
 Numeric types (`ratio`, `number`, `money`) accept a number or a numeric string, converted with
 `Decimal(str(x))`; `int` accepts an integer (or integer string); `bool` accepts only `true`/`false`.
+Numeric and `int` signals, and `base_price`, must satisfy `|x| ≤ 10¹²` (`MAX_ABS`) → else `SignalInvalid`
+("too large"). This keeps every amount far inside the 28-digit context, so quantizing never fails. Any
+arithmetic error that still happens (only a pathological pack can cause one) → `InvariantViolation`,
+never a raw exception.
 
 Public signals: `is_weekend` (Sat/Sun), `weekday` (`mon`…`sun`), `hour` (0–23), `festival`
 (name from the built-in festival table, else `none`; must be one of the signal's `values`, else `none`).
@@ -139,7 +143,11 @@ group). Every golden case and the §10 examples are calculated this way. Rule id
 | `set` v | new price `v` |
 | `formula` | new price = CEL result |
 
-Lookup rules: key = signal value as string (`true`/`false` for bools). Missing key → `default` → else `LookupMiss`.
+Lookup rules: key = signal value as string (`true`/`false` for bools; numbers without trailing zeros, so
+`0.50` and `0.5` are the same key). Table keys are normalised **by the signal's type** at compile time — a
+key written as text `"0.50"` for a numeric signal matches 0.5. A key the signal can never take (not a number
+for a numeric signal, not one of an enum's `values`, not true/false for a bool) → `PackInvalid`.
+Missing key → `default` → else `LookupMiss`.
 Multi-dimensional: key = list of the signal values in `signals` order.
 
 ### 5.2 Stacking — `G` = price at group start
@@ -171,10 +179,15 @@ Packs write CEL syntax: `&&`, `||`, `!`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `in [
 Anything else — calls, attribute access, Python's `and`/`or`/`not` — is rejected at compile time
 (`PackInvalid`), as is an unknown signal name.
 
-- **Exact:** number literals and signals are `Decimal`; `x >= 0.8` with `x = 0.80` is true. Comparing
-  different types with `==` is false; ordering them (`'a' < 1`) or doing arithmetic on non-numbers is an
-  error → `InvariantViolation` at runtime (the fuzz verifier finds these before publish).
-- `when` must produce `true`/`false`; anything else → `InvariantViolation`.
+- **Exact:** number literals and signals are `Decimal`; `x >= 0.8` with `x = 0.80` is true.
+- **Type-checked at compile time** → `PackInvalid`, never a failure on a live request. Signal types map to
+  number (`ratio`, `number`, `money`, `int`), true/false (`bool`) and text (`enum`). `==`/`!=` need the same
+  type on both sides (`festival == 3` is an error, not a rule that silently never fires); `< <= > >=` need
+  two numbers or two texts; `+ - * /` need numbers; `&& || !` need true/false; `x in [..]` needs a list of
+  x's type. Comparing an enum signal with a text it can never have (`festival == 'diwaly'`) is an error.
+  `when` must be true/false and `formula` must be a number.
+- The only runtime expression error left is arithmetic (e.g. division by zero in a `formula`) →
+  `InvariantViolation`.
 - **Implementation:** `engine/expr.py` walks Python's `ast` parse tree through a whitelist (no `eval`, no
   calls, no attributes, no loops), compiled once per pack. **cel-python was measured and rejected:** it
   computes in floats (`price * 1.1` → `3300.0000000000005`), errors on `int > double`, and took ~300 µs per
@@ -240,9 +253,14 @@ All must hold, else `InvariantViolation`:
 
 ## 9. Counterfactuals (`explain.py`)
 
-For each fired `rule` row, re-run `evaluate()` with `disabled_rules={rule.id}` and the **same context**:
-`{"if": "without: <reason>", "price": <new price>}`. Sort by `abs(price − result.price)` descending, keep
-5. Never compute a counterfactual by subtracting deltas.
+Take the fired `rule` rows, pick the **5 with the largest `|delta|`** (ties: waterfall order), and for each
+re-run `evaluate()` with `disabled_rules={rule.id}` and the **same context**:
+`{"if": "without: <reason>", "price": <new price>}`. Sort by `abs(price − result.price)` descending.
+Never compute a counterfactual by subtracting deltas.
+
+- **Bounded cost:** at most 5 re-runs however many rules fired (500 fired rules: 12 ms, not 1.1 s).
+- A re-run that raises `InvariantViolation` is re-raised — an engine bug is never hidden in an
+  explanation. Other engine errors (e.g. `LookupMiss` only reachable with the rule off) skip that rule.
 
 ---
 

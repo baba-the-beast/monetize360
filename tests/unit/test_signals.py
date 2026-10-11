@@ -7,6 +7,7 @@ import pytest
 
 from monetize360.engine import (
     Context,
+    Policy,
     SignalInvalid,
     SignalMissing,
     SignalStale,
@@ -168,3 +169,29 @@ def test_largest_allowed_base_price_works(hotel):
                       "guards": {"floor": {"op": "abs", "value": 1}, "ceiling": {"op": "abs", "value": 10**12}}})
     assert evaluate(p, ctx("1000000000000", occupancy="0.5", is_weekend=False, festival="none")).price \
         == Decimal("1000000000000.00")
+
+
+# ---------------------------------------------------------------- review S2, R2-2: bad context inputs are 422s
+
+@pytest.mark.parametrize("policy, path", [
+    (Policy(max_price=Decimal("NaN")), "policy.max_price"),
+    (Policy(min_price=Decimal("-5")), "policy.min_price"),
+    (Policy(max_surge_x=Decimal("1e40")), "policy.max_surge_x"),
+])
+def test_bad_tenant_policy_is_invalid_input_not_a_pack_error(hotel, policy, path):
+    with pytest.raises(SignalInvalid) as e:
+        evaluate(hotel, ctx("3000", occupancy="0.5"), policy=policy)
+    assert e.value.details[0]["path"] == path
+
+
+@pytest.mark.parametrize("ref", ["1e40", "0", "-1", "NaN"])
+def test_bad_reference_price_is_invalid_input(hotel, ref):
+    with pytest.raises(SignalInvalid, match="reference_price"):
+        evaluate(hotel, Context(base_price=Decimal("3000"), signals={"occupancy": "0.5"}, as_of=WEDNESDAY,
+                                reference_price=Decimal(ref)))
+
+
+def test_feed_timestamp_without_timezone():
+    with pytest.raises(SignalInvalid, match="written_at must be a datetime with a timezone"):
+        evaluate(redis_pack("use_default"), Context(base_price=Decimal("1000"), as_of=WEDNESDAY,
+                                                    redis_signals={"comp": ("1200", datetime(2026, 10, 14, 8))}))

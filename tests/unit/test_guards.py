@@ -101,3 +101,10 @@ def test_tenant_surge_cap_below_floor(hotel):
     with pytest.raises(BoundsConflict, match="floor 2100.00 is above tenant_surge 1500.00"):
         evaluate(hotel, ctx("3000", occupancy="0.5", is_weekend=False, festival="none"),
                  policy=Policy(max_surge_x=Decimal("0.5")))
+
+
+def test_bounds_conflict_details_have_one_stable_shape(hotel):
+    with pytest.raises(BoundsConflict) as e:
+        evaluate(hotel, ctx("8000", occupancy="0.5", is_weekend=False, festival="none"))
+    assert e.value.details == [{"path": "guards", "lower": {"name": "floor", "value": "5600.00"},
+                                "upper": {"name": "ceiling", "value": "5000.00"}, "base_price": "8000.00"}]

@@ -2,10 +2,22 @@
 else raise)."""
 from __future__ import annotations
 
-from decimal import DecimalException, localcontext
+from decimal import Decimal, DecimalException, localcontext
 
 from .guards import clamp, interval
-from .models import DEC, CompiledPack, Context, InvariantViolation, Policy, Result, Row, RuleError, SignalInvalid, q
+from .models import (
+    DEC,
+    MAX_ABS,
+    CompiledPack,
+    Context,
+    InvariantViolation,
+    Policy,
+    Result,
+    Row,
+    RuleError,
+    SignalInvalid,
+    q,
+)
 from .operators import base_price
 from .rounding import round_price
 from .signals import resolve
@@ -16,12 +28,31 @@ def evaluate(pack: CompiledPack, ctx: Context, policy: Policy | None = None,
              disabled_rules: frozenset[str] = frozenset()) -> Result:
     if ctx.as_of.tzinfo is None:
         raise SignalInvalid("as_of must include a timezone", [{"path": "as_of"}])
+    _check_amount(ctx.reference_price, "reference_price")
+    if policy is not None:
+        _check_amount(policy.min_price, "policy.min_price")
+        _check_amount(policy.max_price, "policy.max_price")
+        _check_amount(policy.max_surge_x, "policy.max_surge_x", limit=Decimal(1000))
     try:
         return _evaluate(pack, ctx, policy, disabled_rules)
     except DecimalException as e:
         # inputs are capped (MAX_ABS) and rule arithmetic is caught per rule, so only an absurd pack number
         # (e.g. a base band price of 1e30) gets here: a pack problem, never a raw crash
         raise RuleError(f"price arithmetic out of range ({type(e).__name__}): check the pack's numbers") from None
+
+
+def _check_amount(raw, path: str, limit: Decimal = MAX_ABS) -> None:
+    """A tenant limit or reference price must be a finite number > 0 and <= limit. A bad one is the CALLER's
+    input (422 naming it), never 'check the pack's numbers' (review S2)."""
+    if raw is None:
+        return
+    try:
+        v = Decimal(str(raw))
+    except ArithmeticError:
+        v = None
+    if v is None or not v.is_finite() or v <= 0 or v > limit:
+        raise SignalInvalid(f"{path} must be a number greater than 0 and at most {limit}",
+                            [{"path": path, "value": str(raw)}])
 
 
 def _evaluate(pack: CompiledPack, ctx: Context, policy: Policy | None, disabled_rules: frozenset[str]) -> Result:

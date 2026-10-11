@@ -37,6 +37,7 @@ def check(pack, ctx):
     assert all(r.delta.as_tuple().exponent == -2 for r in rows)
     assert evaluate(pack, ctx) == result                                   # determinism
     for cf in explain(pack, ctx, result):
+        assert "price" in cf, cf                                           # no counterfactual fails on a template
         rule = next(r for r in rows if r.kind == "rule" and f"without: {r.reason}" == cf["if"])
         assert cf["price"] == evaluate(pack, ctx, disabled_rules=frozenset({rule.step})).price
 

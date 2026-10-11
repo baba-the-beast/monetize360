@@ -29,6 +29,7 @@ from .models import (
 )
 from .operators import key_of
 from .publicsignals import DEFAULT_CALENDARS, PUBLIC_SIGNALS, WEEKDAYS
+from .rounding import grid
 from .signals import NUMERIC, coerce
 
 _DURATION = re.compile(r"([1-9][0-9]*)(s|m|h|d)")
@@ -91,8 +92,15 @@ class _Compiler:
                 self.bad(f"calendar/{name}", f"calendar '{name}' needs a public enum signal named {name}")
 
         base = self.adjustment(p["base"], "base", is_base=True)
-        groups, ids = [], set()
+        total = sum(len(g["rules"]) for g in p["groups"])
+        if total > MAX_RULES:                               # before compiling 4,000 expressions for nothing
+            self.bad("groups", f"{total} rules in the pack; the limit is {MAX_RULES}")
+            return None
+        groups, ids, group_names = [], set(), set()
         for gi, g in enumerate(p["groups"]):
+            if g["name"] in group_names:
+                self.bad(f"groups/{gi}/name", f"duplicate group name {g['name']}")
+            group_names.add(g["name"])
             rules = []
             for ri, r in enumerate(g["rules"]):
                 path = f"groups/{gi}/rules/{ri}"
@@ -107,9 +115,6 @@ class _Compiler:
                 rules.append(rule)
             rules.sort(key=lambda r: -r.priority)          # stable: equal priorities keep file order
             groups.append(Group(g["name"], g["stacking"], tuple(rules)))
-        total = sum(len(g["rules"]) for g in p["groups"])
-        if total > MAX_RULES:
-            self.bad("groups", f"{total} rules in the pack; the limit is {MAX_RULES}")
 
         return CompiledPack(
             domain=p["domain"], currency=p["currency"], timezone=tz, signals=self.signals, base=base,
@@ -366,11 +371,17 @@ class _Compiler:
 
     def rounding(self, r: Mapping[str, Any]) -> Rounding:
         step = D(r["step"])
+        ending = r.get("ending")
+        if step > MAX_ABS:
+            self.bad("rounding/step", f"step {r['step']} is larger than the limit {MAX_ABS}")
+            return Rounding(Decimal(1), r["mode"], None)
         if step <= 0 or step % CENT != 0:
             self.bad("rounding/step", "step must be a positive multiple of 0.01")
-        ending = r.get("ending")
-        if ending is not None and step > 0 and (100 % step != 0 or ending % step != 0):
-            # e.g. step 50 + ending 99: no multiple of 50 ends in 99, so prices would break the step
-            self.bad("rounding/ending", f"ending {ending:02d} is unreachable with step {step} "
-                                        "(need 100 % step == 0 and ending % step == 0)")
-        return Rounding(step, r["mode"], ending)
+            return Rounding(Decimal(1), r["mode"], None)
+        rounding = Rounding(step, r["mode"], ending)
+        if ending is not None and grid(rounding) is None:
+            # a multiple of `step` can end in `ending` only if ending % gcd(step, 100) == 0 (whole cents):
+            # step 50 + ending 99 never; step 30 + ending 90 yes (390); step 500 + ending 0 yes
+            self.bad("rounding/ending", f"ending {ending:02d} is unreachable with step {step}: "
+                                        f"no multiple of {step} ends in {ending:02d}")
+        return rounding

@@ -106,7 +106,9 @@ def test_reason_placeholders_are_filled(hotel):
 # -------------------------------- review #11: enforced at compile until the linter exists
 
 @pytest.mark.parametrize("step, ending, ok", [(50, 99, False), (1, 99, True), (50, 50, True), (10, 90, True),
-                                              (30, 90, False), (50, 0, True)])
+                                              (30, 90, True),     # 390, 690, ... (the old rule wrongly refused it)
+                                              (200, 0, True), (500, 0, True), (1000, 0, True),   # review S1
+                                              (200, 50, False), (0.5, 99, True), (25, 75, True), (25, 10, False)])
 def test_ending_must_be_reachable_with_step(step, ending, ok):
     pack = make_pack([{"name": "g", "stacking": "multiply", "rules": [
         {"id": "r", "when": "true", "then": {"op": "pct", "value": 1}, "reason": "r"}]}],
@@ -126,3 +128,30 @@ def test_more_than_500_rules_rejected():
     with pytest.raises(PackInvalid) as e:
         compile_pack(make_pack(groups))
     assert "600 rules in the pack; the limit is 500" in e.value.details[0]["message"]
+
+
+def test_duplicate_group_names_rejected():
+    r1 = {"id": "a", "when": "true", "then": {"op": "pct", "value": 1}, "reason": "r"}
+    r2 = {"id": "b", "when": "true", "then": {"op": "pct", "value": 1}, "reason": "r"}
+    with pytest.raises(PackInvalid) as e:
+        compile_pack(make_pack([{"name": "g", "stacking": "multiply", "rules": [r1]},
+                                {"name": "g", "stacking": "multiply", "rules": [r2]}]))
+    assert e.value.details == [{"path": "groups/1/name", "message": "duplicate group name g"}]
+
+
+def test_huge_rounding_step_has_a_clear_message():
+    pack = make_pack([{"name": "g", "stacking": "multiply", "rules": [
+        {"id": "a", "when": "true", "then": {"op": "pct", "value": 1}, "reason": "r"}]}],
+        rounding={"step": 1e30, "mode": "half_up"})
+    with pytest.raises(PackInvalid) as e:
+        compile_pack(pack)
+    assert e.value.details[0]["path"] == "rounding/step" and "larger than the limit" in e.value.details[0]["message"]
+
+
+def test_rule_cap_reports_only_the_cap():
+    rules = [{"id": f"r{i}", "when": "nope > 1", "then": {"op": "pct", "value": 0}, "reason": "r"} for i in range(200)]
+    groups = [{"name": f"g{j}", "stacking": "multiply",
+               "rules": [dict(r, id=f"{r['id']}-{j}") for r in rules]} for j in range(3)]
+    with pytest.raises(PackInvalid) as e:
+        compile_pack(make_pack(groups))                         # 600 bad rules: not compiled, not 600 errors
+    assert [d["path"] for d in e.value.details] == ["groups"]

@@ -59,7 +59,8 @@ def interval(guards: Guards, base: Decimal, policy: Policy | None,
     if hard_lo > hard_hi:
         raise BoundsConflict(
             f"no valid price: {lo_name} {hard_lo} is above {hi_name} {hard_hi} for base price {base}",
-            [{"path": "guards", "value": {lo_name: str(hard_lo), hi_name: str(hard_hi), "base_price": str(base)}}])
+            [{"path": "guards", "lower": {"name": lo_name, "value": str(hard_lo)},
+              "upper": {"name": hi_name, "value": str(hard_hi)}, "base_price": str(base)}])
 
     result = Interval(hard_lo, hard_hi, lower, upper)
     if guards.max_change_pct is not None and reference is not None:

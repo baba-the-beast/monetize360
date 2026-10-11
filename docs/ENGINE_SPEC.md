@@ -26,6 +26,10 @@ cfs    = explain(pack, ctx, result, policy=None)                        # counte
 | `max_surge_x` | `Decimal \| None` | §6.1 `hard_upper` = `B × max_surge_x` (`tenant_surge`) |
 
 `banned_signals` and `require_two_person` are authoring-time checks (linter / publisher), not engine inputs.
+**Validated like any input:** `policy.min_price`, `policy.max_price` and `ctx.reference_price` must be finite,
+> 0 and ≤ 10¹²; `policy.max_surge_x` finite, > 0 and ≤ 1000; a feed's `written_at` must carry a timezone. Else
+`SignalInvalid` (422) naming the field — never blamed on the pack.
+
 **Kill modes are not engine logic:** `freeze` is answered by the API layer from the stored last price;
 `base_only` calls `evaluate()` with `disabled_rules` = every rule id, so base + guards + rounding still apply.
 
@@ -61,9 +65,9 @@ cfs    = explain(pack, ctx, result, policy=None)                        # counte
 | `SignalStale` | stale and `on_stale: reject` | 503 |
 | `LookupMiss` | key not in table and no `default`; value above last band | 422 |
 | `ExclusiveConflict` | more than one rule fired in an `exclusive` group | 409 |
-| `BoundsConflict` | the limits for this request cross (§6.1), e.g. hotel `base_price` 8000 → floor 5600 > ceiling 5000; names both limits | 422 |
+| `BoundsConflict` | the limits for this request cross (§6.1), e.g. hotel `base_price` 8000 → floor 5600 > ceiling 5000. `details`: `[{path: "guards", lower: {name, value}, upper: {name, value}, base_price}]` — always this shape | 422 |
 | `RuleError` | a rule fails at runtime: `formula` arithmetic (÷0, out of range); names the rule | 500 |
-| `InvariantViolation` | **only** the self-check (§8) — an engine bug, never a wrong price, never a pack or input problem | 500 |
+| `InvariantViolation` | an **engine bug**: the self-check (§8) failed, or the code reached a state `compile_pack` rules out (unknown operator, a curve with no segment). Never a pack or input problem, never a wrong price | 500 |
 
 **The engine reads no files.** It never loads `pack.schema.json`; callers (`control/schema.py`, used by
 `PUT /v1/packs`, the linter and the tests) validate the pack dict first. That keeps the engine pure and
@@ -263,16 +267,18 @@ No row when nothing is clamped.
 
 ## 7. Rounding (`stage: round`)
 
-1. `R = P` rounded to a multiple of `step` with `mode` (`half_up` | `down` | `up`).
-2. If `ending` is set, with `c = ⌊R/100⌋×100 + ending`, follow `mode`:
-   `down` → the largest of `c`, `c − 100` that is ≤ `R` (rounding down never raises a price);
-   `up` → the smallest of `c`, `c + 100` that is ≥ `R`;
-   `half_up` → the nearest of `c − 100`, `c`, `c + 100`, a tie goes up.
-   `compile_pack` rejects an `ending` the `step` can never produce (needs `100 % step == 0` and
-   `ending % step == 0`).
-3. If `R` is outside the guard interval, move to the nearest valid value (one that matches the step and
-   ending) inside it. If none exists, `R = P` and add flag `rounding skipped: bounds tighter than step`.
-4. Emit `Row(step="rounding", kind="rounding", delta=R − P)` only if non-zero.
+A **valid price** is a multiple of `step` that, if `ending` is set, also ends in it (`step: 1, ending: 99` →
+…6099, 6199…; `step: 30, ending: 90` → 90, 390, 690…; `step: 500, ending: 0` → every multiple of 500). In whole
+cents valid prices exist iff `ending ≡ 0 (mod gcd(step, 100))` — `compile_pack` refuses any other pair — and then
+repeat every `lcm(step, 100)`, so the nearest one is computed exactly, never searched for.
+
+1. From `P` directly (no double rounding), pick per `mode`: `down` → the largest valid price ≤ `P`; `up` → the
+   smallest ≥ `P`; `half_up` → the nearer of the two, a tie goes up.
+2. If that is outside the guard interval, move to the nearest valid price inside it. If none exists, `R = P` and
+   add flag `rounding skipped: bounds tighter than step`. If the move went against `mode` (`down` had to go up
+   to stay above the lower bound, or `up` had to go down), add a flag saying so: `rounding went up: no valid
+   price at or below 6150.00 is inside the guard interval`.
+3. Emit `Row(step="rounding", kind="rounding", delta=R − P)` only if non-zero.
 
 ---
 
@@ -297,7 +303,8 @@ Never compute a counterfactual by subtracting deltas.
 - Zero-delta rows rank last but are not skipped: in a `first_match` / `max` group, switching off a chosen
   zero-delta rule lets the next rule apply, so the price does change.
 - A re-run that raises `InvariantViolation` is re-raised — an engine bug is never hidden in an
-  explanation. Other engine errors (e.g. `LookupMiss` only reachable with the rule off) skip that rule.
+  explanation. Any other error is reported, not dropped: `{"if": "without: <reason>", "error": {code,
+  message}}` (e.g. without rule A, rule B divides by zero). Failed ones are listed after the priced ones.
 
 ---
 

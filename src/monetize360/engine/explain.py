@@ -1,5 +1,6 @@
 """Counterfactuals (ENGINE_SPEC §9): RE-RUN evaluate() with one fired rule disabled, for the 10 rule rows with the
-largest |delta|; keep the 5 that change the price most. Never by subtracting numbers."""
+largest |delta|; keep the 5 that change the price most. Never by subtracting numbers. A re-run that fails is
+reported as {"if", "error": {code, message}}; an engine bug (InvariantViolation) is raised."""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -24,8 +25,11 @@ def explain(pack: CompiledPack, ctx: Context, result: Result,
             alt = evaluate(pack, ctx, policy, frozenset({row.step}))
         except InvariantViolation:
             raise                 # an engine bug must surface, never hide inside an explanation
-        except EngineError:
-            continue              # e.g. a lookup only reachable with this rule on: no honest counterfactual
+        except EngineError as e:
+            # e.g. without this rule another one divides by zero: say so instead of silently dropping it (S3)
+            out.append({"if": f"without: {row.reason}", "error": {"code": e.code, "message": e.message}})
+            continue
         out.append({"if": f"without: {row.reason}", "price": alt.price})
-    out.sort(key=lambda c: abs(c["price"] - result.price), reverse=True)   # stable for ties
+    # priced ones first, biggest change first (stable for ties); failed re-runs last
+    out.sort(key=lambda c: (0, -abs(c["price"] - result.price)) if "price" in c else (1, 0))
     return out[:MAX_COUNTERFACTUALS]

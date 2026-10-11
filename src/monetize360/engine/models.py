@@ -65,7 +65,8 @@ class RuleError(EngineError):
 
 
 class InvariantViolation(EngineError):
-    """The self-check failed: a bug in the ENGINE, never a pack or input problem. HTTP 500."""
+    """A bug in the ENGINE, never a pack or input problem: the self-check failed, or code reached a state the
+    compiler rules out (an unknown operator, a curve with no segment). HTTP 500."""
     code = "invariant_violation"
 
 

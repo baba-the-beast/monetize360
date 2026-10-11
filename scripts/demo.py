@@ -39,7 +39,8 @@ def price(name: str, ctx: Context) -> None:
         sign = "" if row.kind == "base" else ("+" if row.delta >= 0 else "")
         print(f"   {row.step:<20} {sign}{row.delta:>10}   = {row.after:>10}   {DIM}{row.reason}{OFF}")
     for cf in explain(p, ctx, r):
-        print(f"   {DIM}{cf['if']:<44} would be {cf['price']}{OFF}")
+        outcome = cf["price"] if "price" in cf else f"error: {cf['error']['message']}"
+        print(f"   {DIM}{cf['if']:<44} would be {outcome}{OFF}")
 
 
 def domains() -> None:

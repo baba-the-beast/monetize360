@@ -34,7 +34,7 @@ Base URL (demo): `http://localhost:8080` · Interactive docs: `/docs` · All bod
 | 409 | `approval_required` / `same_person` | publish without approval / approver = author |
 | 422 | `signal_invalid`, `signal_missing`, `lookup_miss`, `pack_invalid` | bad input / bad pack |
 | 429 | `rate_limited` | with `Retry-After` header |
-| 422 | `bounds_conflict` | no price can satisfy the limits for this request (e.g. `base_price` so high that floor > ceiling); names both limits |
+| 422 | `bounds_conflict` | no price can satisfy the limits for this request (e.g. `base_price` so high that floor > ceiling). `details`: `[{path: "guards", lower: {name, value}, upper: {name, value}, base_price}]` |
 | 500 | `rule_error` | a pack rule failed at runtime (e.g. formula divides by zero); names the rule — fix the pack |
 | 500 | `invariant_violation` | engine self-check failed — an engine bug; no price returned |
 | 503 | `signal_stale`, `killed` | stale signal with `on_stale: reject`; domain in kill mode `freeze` without a stored price |
@@ -85,6 +85,9 @@ Base URL (demo): `http://localhost:8080` · Interactive docs: `/docs` · All bod
 ```
 
 `valid_until` = `as_of` + 15 min by default (clients may reuse the price until then).
+
+A counterfactual whose re-run fails is reported, not dropped: `{ "if": "without: Plus 100", "error": { "code":
+"rule_error", "message": "..." } }`, listed after the priced ones.
 
 ### `POST /v1/price/{domain}/batch`
 

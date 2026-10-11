@@ -15,7 +15,10 @@ PUBLIC_SIGNALS = {"is_weekend": "bool", "weekday": "enum", "hour": "int", "minut
                   "month": "int", "festival": "enum"}
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
-# TODO(R1): verify every date against an official calendar before the demo.
+# Verified 2026-10-11 (BUILD_GUIDE R1). 2026: central government holiday list (DoPT order of 3 Jul 2025) —
+# Holi 4 Mar, Diwali 8 Nov. 2025 and 2027: Drik / Dekho Panchang (Holi 14 Mar 2025, 22 Mar 2027; Diwali
+# 20 Oct 2025, 29 Oct 2027). Some regions play Holi a day earlier (3 Mar 2026): a pack that needs regional dates
+# carries its own `calendar:` section. Add 2028+ before late 2027 (the linter warns: calendar_ends).
 FESTIVALS: dict[date, str] = {
     date(2025, 3, 14): "holi",
     date(2025, 10, 20): "diwali",

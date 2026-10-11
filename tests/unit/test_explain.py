@@ -68,3 +68,16 @@ def test_counterfactual_prices_are_fresh_evaluations(hotel):
     for cf in cfs:
         rule = rule_of[cf["if"].removeprefix("without: ")]
         assert cf["price"] == evaluate(hotel, c, disabled_rules=frozenset({rule})).price
+
+
+def test_a_counterfactual_that_fails_is_reported_not_dropped():
+    # review S3: without A (+100), B divides by (1000 - 1000) -> rule_error; it must show, not vanish
+    rules = [{"id": "a", "when": "true", "then": {"op": "abs", "value": 100}, "reason": "Plus 100"},
+             {"id": "b", "when": "true", "then": {"op": "formula", "expr": "price / (price - 1000) * 1000"},
+              "reason": "Odd formula"}]
+    pack = compile_pack(make_pack([{"name": "g", "stacking": "multiply", "rules": rules}]))
+    c = ctx()
+    cfs = explain(pack, c, evaluate(pack, c))
+    failed = [cf for cf in cfs if "error" in cf]
+    assert [cf["if"] for cf in failed] == ["without: Plus 100"]
+    assert failed[0]["error"]["code"] == "rule_error" and cfs[-1] is failed[0]      # failures listed last

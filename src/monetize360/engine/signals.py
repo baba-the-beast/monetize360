@@ -101,6 +101,9 @@ def resolve(pack: CompiledPack, ctx: Context) -> tuple[dict[str, Any], dict[str,
                 use_default(spec, "missing", SignalMissing)
                 continue
             raw, written_at = ctx.redis_signals[name]
+            if getattr(written_at, "tzinfo", None) is None:
+                raise SignalInvalid(f"{name}: the feed's written_at must be a datetime with a timezone",
+                                    [{"path": f"redis_signals.{name}", "value": str(written_at)}])
             age = ctx.as_of - written_at
             if spec.max_staleness is not None and age > spec.max_staleness:
                 why = f"stale ({age} > {spec.max_staleness})"

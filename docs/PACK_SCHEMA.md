@@ -225,7 +225,7 @@ The first two are **also enforced by `compile_pack`** (`PackInvalid`), so they h
 | Rule | Why |
 |---|---|
 | Total rules across all groups ≤ 500 | Schema allows 20 groups × 200 = 4,000; cap the real cost |
-| If `ending` is set: `100 % step == 0` **and** `ending % step == 0` | `step: 50, ending: 99` can never be satisfied (no multiple of 50 ends in 99). Valid: step 1 + any ending; step 50 + ending 0 or 50; step 10 + ending 90 |
+| If `ending` is set: `ending % gcd(step, 100) == 0` (in whole cents) | `step: 50, ending: 99` can never be satisfied (no multiple of 50 ends in 99). Valid: step 1 + any ending; step 50 + ending 0 or 50; step 10 + ending 90; step 30 + ending 90 (390, 690…); step 200 / 500 / 1000 + ending 0 |
 | Absolute floor < absolute ceiling | Two fields; the engine would raise `BoundsConflict` on every request |
 | **Warning:** highest `base_price` the pack can price | `floor: pct_of_base` + `ceiling: abs` cross above a base price (hotel: 5000 / 0.70 = ₹7,142.86) → `bounds_conflict` (422) above it |
 | Ceiling ≤ tenant `max_price`, floor ≥ tenant `min_price` | Needs the tenant policy |

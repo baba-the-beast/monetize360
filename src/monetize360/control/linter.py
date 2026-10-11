@@ -6,7 +6,7 @@ What a static check can't prove (formula bounds, overlapping exclusive rules) is
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from itertools import product
 from typing import Any, Iterable, Mapping
@@ -14,14 +14,26 @@ from typing import Any, Iterable, Mapping
 from monetize360.control.schema import validate
 from monetize360.engine import PackInvalid, Policy, compile_pack
 
-# A price must never depend on who someone IS. Matched against whole snake_case segments of a signal name,
-# so `customer_religion` is caught and `package` (contains "age") is not.
-PROTECTED = ("gender", "sex", "religion", "caste", "race", "ethnicity", "ethnic", "tribe", "disability",
-             "disabled", "pregnancy", "pregnant", "sexual_orientation", "marital_status", "nationality", "age",
-             "skin_colour", "skin_color", "health", "political_party")
+# A price must never depend on who someone IS. Words are matched against whole snake_case segments of a signal
+# name. Words that are always about a person block anywhere (`customer_religion`, `religion_group`). Words with an
+# innocent meaning too block only alone or next to a person word: `customer_age` blocks, `vehicle_age`,
+# `stock_age_days`, `race_day`, `battery_health`, `mobile_app`, `phone_model` don't (review L1).
+PROTECTED = ("religion", "religious", "caste", "ethnicity", "ethnic", "tribe", "tribal", "gender",
+             "sexual_orientation", "pregnancy", "pregnant", "marital_status", "nationality", "disability",
+             "skin_colour", "skin_color", "political_party")
+PROTECTED_IF_ABOUT_A_PERSON = ("age", "sex", "race", "health", "disabled")
 # Identifies a person: a price set with it is "personalised pricing" (e.g. New York's disclosure law).
-PERSONAL = ("email", "phone", "mobile", "aadhaar", "pan_number", "passport", "ssn", "ip_address", "user_id",
-            "customer_id", "device_id", "full_name", "first_name", "last_name", "date_of_birth", "dob", "address")
+PERSONAL = ("email", "aadhaar", "pan_number", "passport", "ssn", "ip_address", "user_id", "customer_id",
+            "device_id", "full_name", "first_name", "last_name", "date_of_birth", "dob", "phone_number",
+            "mobile_number")
+PERSONAL_IF_ABOUT_A_PERSON = ("phone", "mobile", "address")
+PERSON = ("customer", "user", "guest", "buyer", "passenger", "rider", "driver", "traveller", "traveler", "member",
+          "patient", "person", "client", "shopper", "visitor", "student", "employee", "applicant", "cardholder")
+# Values that ARE a protected attribute, whatever the signal is called: `segment: [male, female]` (review L2).
+PROTECTED_VALUES = frozenset((
+    "male", "female", "transgender", "non_binary", "nonbinary", "intersex", "gay", "lesbian", "bisexual",
+    "hindu", "muslim", "christian", "sikh", "jain", "buddhist", "parsi", "jewish", "atheist",
+    "dalit", "brahmin", "adivasi", "obc", "scheduled_caste", "scheduled_tribe", "pregnant"))
 # Not banned, but can stand in for a protected attribute (where someone lives can reveal caste or religion).
 PROXIES = ("pincode", "pin_code", "zip", "zipcode", "postcode", "postal_code", "neighbourhood", "neighborhood")
 
@@ -32,9 +44,28 @@ def _has(name: str, word: str) -> bool:
     return f"_{word}_" in f"_{name}_"
 
 
+def _about_a_person(name: str, word: str) -> bool:
+    return name == word or (_has(name, word) and any(_has(name, p) for p in PERSON))
+
+
+def _protected_word(name: str) -> str | None:
+    return (next((w for w in PROTECTED if _has(name, w)), None)
+            or next((w for w in PROTECTED_IF_ABOUT_A_PERSON if _about_a_person(name, w)), None))
+
+
+def _personal_word(name: str) -> str | None:
+    return (next((w for w in PERSONAL if _has(name, w)), None)
+            or next((w for w in PERSONAL_IF_ABOUT_A_PERSON if _about_a_person(name, w)), None))
+
+
+def _protected_values(values) -> list[str]:
+    return sorted({str(v) for v in values if str(v).lower().replace("-", "_") in PROTECTED_VALUES})
+
+
 def lint(pack: Mapping[str, Any], *, policy: Policy | None = None, banned_signals: Iterable[str] = (),
-         as_of: datetime | None = None) -> dict[str, Any]:
-    """Lint a pack dict. `policy` / `banned_signals` = the tenant's (L2); `as_of` = "now" for expiry checks."""
+         fairness_exceptions: Iterable[str] = (), as_of: datetime | None = None) -> dict[str, Any]:
+    """Lint a pack dict. `policy` / `banned_signals` = the tenant's (L2); `fairness_exceptions` = signal names the
+    tenant has cleared (a fairness error becomes a warning an approver must sign off); `as_of` = "now"."""
     out = _Lint()
     schema_errors = validate(pack)
     for e in schema_errors:
@@ -42,7 +73,7 @@ def lint(pack: Mapping[str, Any], *, policy: Policy | None = None, banned_signal
     if schema_errors:
         return out.result()                       # the other checks need a well-formed pack
 
-    out.fairness(pack["signals"], set(banned_signals))
+    out.fairness(pack, set(banned_signals), set(fairness_exceptions))
     try:
         compiled = compile_pack(pack)
     except PackInvalid as e:
@@ -51,7 +82,9 @@ def lint(pack: Mapping[str, Any], *, policy: Policy | None = None, banned_signal
         return out.result()
 
     out.tenant_limits(compiled, policy)
-    out.rules(compiled, as_of or datetime.now(timezone.utc))
+    now = as_of or datetime.now(timezone.utc)
+    out.rules(compiled, now)
+    out.calendars(compiled, now)
     out.defaults(compiled)
     out.max_base(compiled, policy)
     out.coverage(compiled)
@@ -75,19 +108,26 @@ class _Lint:
 
     # ------------------------------------------------------------ fairness (platform policy L3 + tenant L2)
 
-    def fairness(self, signals: Mapping[str, Any], banned: set[str]) -> None:
-        for name in signals:
+    def fairness(self, pack: Mapping[str, Any], banned: set[str], exceptions: set[str]) -> None:
+        keys = _table_keys(pack)
+        for name, spec in pack["signals"].items():
             path = f"signals/{name}"
-            hit = next((w for w in PROTECTED if _has(name, w)), None)
+            hit = _protected_word(name)
             if hit:
                 what = "a protected attribute" if name == hit else f"a protected attribute ({hit})"
-                self.error("fairness", path, f"Fairness violation: '{name}' is {what}; "
-                                             "a price can't depend on who someone is")
+                self.fairness_error(name, exceptions, "fairness", path,
+                                    f"Fairness violation: '{name}' is {what}; a price can't depend on who someone is")
                 continue
-            hit = next((w for w in PERSONAL if _has(name, w)), None)
+            hit = _personal_word(name)
             if hit:
-                self.error("personal_data", path, f"'{name}' identifies a person ({hit}); prices are never set "
-                                                  "from personal data")
+                self.fairness_error(name, exceptions, "personal_data", path,
+                                    f"'{name}' identifies a person ({hit}); prices are never set from personal data")
+                continue
+            values = _protected_values(list(spec.get("values", ())) + keys.get(name, []))
+            if values:
+                self.fairness_error(name, exceptions, "fairness", path,
+                                    f"Fairness violation: '{name}' takes protected values ({', '.join(values)}); "
+                                    "a price can't depend on who someone is, whatever the signal is called")
                 continue
             if name in banned:
                 self.error("banned_signal", path, f"'{name}' is banned by this tenant's policy")
@@ -96,6 +136,26 @@ class _Lint:
             if hit:
                 self.warn("fairness_proxy", path, f"'{name}' ({hit}) can stand in for a protected attribute; "
                                                   "check prices don't differ unfairly by area")
+
+    def fairness_error(self, name: str, exceptions: set[str], code: str, path: str, message: str) -> None:
+        if name in exceptions:
+            self.warn("fairness_exception", path, f"{message} — allowed by a tenant exception; an approver must "
+                                                  "sign this off before publish")
+        else:
+            self.error(code, path, message)
+
+    # ------------------------------------------------------------ calendars that run out (review C1)
+
+    def calendars(self, compiled, now: datetime) -> None:
+        horizon = (now + timedelta(days=548)).date()           # about 18 months ahead
+        for spec in compiled.signals.values():
+            if not spec.calendar:
+                continue
+            last = max(spec.calendar)
+            if last < horizon:
+                self.warn("calendar_ends", f"signals/{spec.name}",
+                          f"{spec.name} has no dates after {last}: from then on every day is 'none' and those "
+                          "rules stop firing. Add later dates (a calendar: section in the pack)")
 
     # ------------------------------------------------------------ tenant limits (L2 vs L1)
 
@@ -106,6 +166,12 @@ class _Lint:
         if policy.max_price is not None and g.ceiling.op == "abs" and g.ceiling.value > Decimal(policy.max_price):
             self.error("tenant_limit", "guards/ceiling", f"ceiling {g.ceiling.value} is above the tenant maximum "
                                                          f"{policy.max_price}")
+        if policy.min_price is not None and g.ceiling.op == "abs" and Decimal(policy.min_price) > g.ceiling.value:
+            self.error("tenant_limit", "guards/ceiling", f"tenant minimum {policy.min_price} is above the ceiling "
+                                                         f"{g.ceiling.value}: no price is ever valid (review S5)")
+        if policy.max_price is not None and g.floor.op == "abs" and Decimal(policy.max_price) < g.floor.value:
+            self.error("tenant_limit", "guards/floor", f"tenant maximum {policy.max_price} is below the floor "
+                                                       f"{g.floor.value}: no price is ever valid (review S5)")
         if policy.min_price is not None and g.floor.op == "abs" and g.floor.value < Decimal(policy.min_price):
             self.error("tenant_limit", "guards/floor", f"floor {g.floor.value} is below the tenant minimum "
                                                        f"{policy.min_price}")
@@ -208,3 +274,18 @@ class _Lint:
             if name not in used:
                 self.warn("unused_signal", f"signals/{name}", f"{name} is declared but no rule, table or guard "
                                                               "uses it")
+
+
+def _table_keys(pack: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Lookup-table keys per signal, read from the raw pack (a key IS a value the signal takes)."""
+    out: dict[str, list[str]] = {}
+    adjustments = [pack["base"]] + [r["then"] for g in pack["groups"] for r in g["rules"]]
+    for adj in adjustments:
+        if adj.get("op") != "lookup_table":
+            continue
+        if "table" in adj:
+            out.setdefault(adj["signal"], []).extend(str(k) for k in adj["table"])
+        for row in adj.get("rows", ()):
+            for sig, key in zip(adj.get("signals", ()), row["key"], strict=False):
+                out.setdefault(sig, []).append(str(key))
+    return out

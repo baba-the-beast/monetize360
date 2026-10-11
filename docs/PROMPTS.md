@@ -71,7 +71,7 @@ A7. Implement engine/explain.py (§9: counterfactuals by re-running evaluate wit
 A8. Implement control/linter.py: the checks listed in ARCHITECTURE.md §9 (unknown signals via CEL
     type-check, floor > ceiling, ceiling above tenant max, banned signals, unreachable rules,
     exclusive groups that can double-fire, unsorted bands, more than 500 rules in the pack,
-    ending unreachable with step: need 100 % step == 0 and ending % step == 0 — see
+    ending unreachable with step: need ending % gcd(step, 100) == 0 — see
     PACK_SCHEMA.md "Checked by the linter"). Return {ok, errors, warnings}. Write one test per
     check in tests/unit/test_linter.py; hotel.yaml and airline.yaml must lint clean.
 ```

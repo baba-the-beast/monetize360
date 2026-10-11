@@ -136,6 +136,13 @@ curl -X POST localhost:8000/v1/admin/kill   -H "Authorization: Bearer <admin key
 back. Every server obeys: at once through Redis, within 10 s without it, and a server started later already
 knows.
 
+### Admin console
+
+Open <http://localhost:8000/admin/> and sign in with an `admin` key from `.demo-keys.json`. Switch the engine per
+domain, upload and publish rules, set limits, manage API keys and inspect every recorded price. It is a plain
+client of the API above: static files, no build step. Screens, the API each one calls and a demo script:
+[docs/ADMIN_CONSOLE.md](docs/ADMIN_CONSOLE.md). `python scripts/demo_traffic.py` records some sample prices first.
+
 ### Load test, scoreboard and the engine-frozen check
 
 ```sh

@@ -35,7 +35,8 @@ function signIn(message) {
 
   const form = h('form.panel', { onsubmit: (e) => {
     e.preventDefault();
-    const key = input.value.trim();
+    // forgive a key pasted with its quotes, a trailing comma or the word Bearer (copied out of a JSON file or a curl line)
+    const key = input.value.trim().replace(/^Bearer\s+/i, '').replace(/^["'\s]+|["',\s]+$/g, '');
     run(submit, async () => {
       try {
         const me = await api('GET', '/v1/me', undefined, { key });

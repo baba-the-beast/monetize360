@@ -256,6 +256,28 @@ def test_control_app_starts_with_ops_endpoints_only():
     assert c.post("/v1/price/hotel", json=HOTEL).status_code == 404
 
 
+def test_console_is_on_the_control_app_only_and_no_script_runs_inline():
+    control = TestClient(create_control_app(dev_tenant="demo"))
+    page = control.get("/admin/")
+    assert page.status_code == 200 and "default-src 'self'" in page.headers["content-security-policy"]
+    # the policy forbids inline code, so the page must not rely on any
+    assert "<style" not in page.text and "style=" not in page.text and "onclick" not in page.text
+    assert control.get("/v1/me").json() == {"tenant_id": "demo", "key_id": "dev", "role": "admin", "domains": ["*"]}
+    assert TestClient(create_pricing_app(dev_tenant="demo")).get("/admin/").status_code == 404
+
+
+def test_console_never_builds_html_from_text():
+    """Everything the server sends is put on the page as text nodes. innerHTML would turn a pack's `reason`
+    or a key's name into markup."""
+    from monetize360.api.routes.console import FILES
+    scripts = list((FILES / "js").glob("*.js"))
+    assert scripts
+    for script in scripts:
+        code = "\n".join(line.split("//")[0] for line in script.read_text(encoding="utf-8").splitlines())
+        for banned in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
+            assert banned not in code, f"{script.name} uses {banned}"
+
+
 def test_swagger_prefilled_examples_work_as_is(client):
     """'Try it out' then Execute must succeed without editing anything (domain is pre-filled with hotel)."""
     spec = client.get("/openapi.json").json()

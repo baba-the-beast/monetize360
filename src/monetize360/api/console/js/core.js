@@ -55,11 +55,11 @@ export function h(tag, attrs, ...kids) {
   const el = document.createElement(name || 'div');
   if (classes.length) el.className = classes.join(' ');
   for (const [k, v] of Object.entries(attrs || {})) {
-    if (v === null || v === undefined || v === false) continue;
-    if (k === 'class') el.classList.add(...String(v).split(' ').filter(Boolean));
+    if (v === null || v === undefined) continue;
+    if (k === 'class') { if (v) el.classList.add(...String(v).split(' ').filter(Boolean)); }
     else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-    else if (!k.includes('-') && k in el) el[k] = v;
-    else el.setAttribute(k, v === true ? '' : v);
+    else if (!k.includes('-') && k in el) el[k] = v;          // properties, so false means false (spellcheck, disabled)
+    else if (v !== false) el.setAttribute(k, v === true ? '' : v);
   }
   append(el, kids);
   return el;

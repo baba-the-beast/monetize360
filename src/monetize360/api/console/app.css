@@ -79,10 +79,10 @@ a { color: inherit; }
 .btn.sm { height: 28px; padding: 0 9px; font-size: 12.5px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-label.field { display: grid; gap: 6px; }
+.field { display: grid; gap: 6px; }
 .field > span { font-size: 12.5px; font-weight: 550; }
 .field > small { color: var(--muted); font-size: 12.5px; }
-input[type="text"], input[type="password"], input[type="number"], input[type="date"], select, textarea {
+input[type="text"], input[type="password"], input[type="number"], input[type="date"], input[type="datetime-local"], select, textarea {
   width: 100%; height: 36px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: var(--radius);
   background: var(--surface); color: var(--text); font: inherit;
 }
@@ -92,7 +92,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .check { display: flex; align-items: center; gap: 8px; }
 .check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .form { display: grid; gap: 16px; }
-.form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+.form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; align-items: start; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .actions.end { justify-content: flex-end; }
 
@@ -143,6 +143,8 @@ main { padding: 32px 40px 72px; min-width: 0; }
 .panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .panel-head p { color: var(--muted); font-size: 12.5px; }
 .panel-body { padding: 18px; }
+.stack { display: grid; gap: 24px; }
+.form > div:empty, .panel > div:empty, .page > div:empty { display: none; }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; align-items: start; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .tile { padding: 16px 18px; }
@@ -222,8 +224,8 @@ tbody tr.link:hover { background: var(--sunken); }
 .fact span { color: var(--muted); font-size: 12.5px; }
 
 /* ---------- tabs, code, diff ---------- */
-.tabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); overflow-x: auto; }
-.tabs button { height: 42px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--muted); font: inherit; font-weight: 540; cursor: pointer; white-space: nowrap; }
+.tabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; }
+.tabs button { height: 42px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: inherit; font-weight: 540; cursor: pointer; white-space: nowrap; }
 .tabs button:hover { color: var(--text); }
 .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--ink); }
 pre.code { margin: 0; padding: 16px 18px; overflow: auto; max-height: 520px; font: 12.5px/1.65 var(--mono); tab-size: 2; }

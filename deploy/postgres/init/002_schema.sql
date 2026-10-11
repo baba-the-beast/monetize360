@@ -82,7 +82,10 @@ CREATE TABLE audit_log_default PARTITION OF audit_log DEFAULT;
 CREATE INDEX audit_chain_idx ON audit_log (tenant_id, domain, seq);
 
 -- ---------- permissions: app role can never rewrite history ----------
-GRANT SELECT, INSERT, UPDATE ON tenants, tenant_policy, api_keys, pack_pointer TO m360_app;
+GRANT SELECT ON tenants TO m360_app;                           -- tenants are created by the operator (owner role)
+GRANT SELECT, INSERT, UPDATE ON tenant_policy, pack_pointer TO m360_app;
+GRANT SELECT, INSERT ON api_keys TO m360_app;
+GRANT UPDATE (revoked_at) ON api_keys TO m360_app;            -- create and revoke; never rewrite secret, role or scope
 GRANT SELECT, INSERT, UPDATE (status, approver, compiled, lint_report, verify_report) ON packs TO m360_app;
 GRANT SELECT, INSERT ON audit_log TO m360_app;                -- no UPDATE, no DELETE
 
@@ -99,6 +102,10 @@ BEGIN
     END LOOP;
 END $$;
 
+-- A tenant may read its own row only: no listing, renaming or creating other companies.
+ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON tenants USING (id = current_setting('app.tenant_id', true));
+
 -- Auth runs BEFORE the tenant is known, so RLS would hide every key.
 -- This one narrow function (runs as the table owner) returns a single key by id - nothing else.
 CREATE FUNCTION lookup_api_key(p_key_id text)
@@ -110,3 +117,15 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
 $$;
 REVOKE ALL ON FUNCTION lookup_api_key(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION lookup_api_key(text) TO m360_app;
+
+-- Pricing replicas load EVERY tenant's live pack at startup, before any request (so before any tenant is known).
+-- Only the service account can call this; a tenant's own queries still go through RLS.
+CREATE FUNCTION list_live_packs()
+RETURNS TABLE (tenant_id text, domain text, version integer, yaml text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+    SELECT p.tenant_id, p.domain, p.version, p.yaml
+    FROM pack_pointer pp
+    JOIN packs p ON p.tenant_id = pp.tenant_id AND p.domain = pp.domain AND p.version = pp.live_version
+$$;
+REVOKE ALL ON FUNCTION list_live_packs() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION list_live_packs() TO m360_app;

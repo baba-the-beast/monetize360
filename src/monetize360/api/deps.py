@@ -1,26 +1,53 @@
 """FastAPI dependencies: require_principal(role), rate limit, domain scope check (404 if not allowed).
 
-M3: there are no API keys yet, so the only principal is the dev tenant from settings (DEV_TENANT). Without it
-every call is 401 — the API is closed by default. M4 replaces the body of `current_principal` with key
-verification; routes don't change. Rate limiting arrives with Redis (M4)."""
+Who is calling comes ONLY from the API key (`Authorization: Bearer m360_...`): the key gives the tenant, the
+role and the domains. Nothing in the URL or body can change the tenant. When the app runs without a database
+(DEV_TENANT, local development only) every caller is that one dev tenant instead."""
 from __future__ import annotations
 
+import math
 from typing import Callable
 
 from fastapi import Depends, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from monetize360.api.errors import ApiError, pack_not_found, unauthorized
+from monetize360.security.keys import KeyStoreUnavailable, KeyVerifier
 from monetize360.security.principal import ALL_DOMAINS, Principal
 from monetize360.store.packcache import LivePack, PackCache
 
 _RANK = {"pricing": 0, "editor": 1, "approver": 2, "admin": 3}
+DEFAULT_RPS = 200
+# Declares the scheme in OpenAPI, which gives Swagger its "Authorize" button. auto_error=False: we answer in our
+# own error format, and a missing header is fine in dev-tenant mode.
+bearer = HTTPBearer(auto_error=False, bearerFormat="m360 API key",
+                    description="Paste an API key: m360_live_<key_id>_<secret>")
 
 
-def current_principal(request: Request) -> Principal:
-    dev_tenant = request.app.state.dev_tenant
-    if not dev_tenant:
+def current_principal(request: Request,
+                      credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Principal:   # noqa: B008
+    verifier: KeyVerifier | None = request.app.state.keys
+    if verifier is None:                                   # no database: dev tenant, or closed
+        dev_tenant = request.app.state.dev_tenant
+        if not dev_tenant:
+            raise unauthorized()
+        return Principal(tenant_id=dev_tenant, key_id="dev", role="admin", domains=frozenset({ALL_DOMAINS}))
+
+    if credentials is None:                                # no header, or not "Bearer ..."
         raise unauthorized()
-    return Principal(tenant_id=dev_tenant, key_id="dev", role="admin", domains=frozenset({ALL_DOMAINS}))
+    try:
+        principal = verifier.verify(credentials.credentials.strip())
+    except KeyStoreUnavailable:
+        raise ApiError(503, "auth_unavailable", "can't check API keys right now; retry shortly",
+                       headers={"Retry-After": "5"}) from None
+    if principal is None:
+        raise unauthorized()                               # unknown, wrong, expired and revoked all look the same
+
+    wait = request.app.state.limiter.allow(principal.key_id, verifier.rate_limit_rps(principal.key_id) or DEFAULT_RPS)
+    if wait > 0:
+        raise ApiError(429, "rate_limited", "too many requests for this key",
+                       headers={"Retry-After": str(max(1, math.ceil(wait)))})
+    return principal
 
 
 def require_principal(role: str) -> Callable[..., Principal]:

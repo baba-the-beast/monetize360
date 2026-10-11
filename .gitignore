@@ -11,3 +11,5 @@ build/
 .env
 *.log
 bench/results/
+.env.local
+.demo-keys.json

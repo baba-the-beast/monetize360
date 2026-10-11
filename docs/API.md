@@ -37,6 +37,7 @@ Base URL (demo): `http://localhost:8080` · Interactive docs: `/docs` · All bod
 | 422 | `bounds_conflict` | no price can satisfy the limits for this request (e.g. `base_price` so high that floor > ceiling). `details`: `[{path: "guards", lower: {name, value}, upper: {name, value}, base_price}]` |
 | 500 | `rule_error` | a pack rule failed at runtime (e.g. formula divides by zero); names the rule — fix the pack |
 | 500 | `invariant_violation` | engine self-check failed — an engine bug; no price returned |
+| 503 | `auth_unavailable` | the key store can't be reached and this replica has never seen this key; `Retry-After: 5`. Keys already seen keep working |
 | 503 | `signal_stale`, `killed` | stale signal with `on_stale: reject`; domain in kill mode `freeze` without a stored price |
 
 ---

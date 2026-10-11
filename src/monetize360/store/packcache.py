@@ -1,8 +1,8 @@
 """In-memory {(tenant, domain): CompiledPack}; atomic swap on publish event, 10s poll backstop, keep last-known-
 good on load failure.
 
-M3: packs come from a directory of YAML files (`load_directory`). M5 adds the Postgres source, the publish event
-and the poll; they call the same `put`, so the hot path (`get`) doesn't change."""
+Sources: a directory of YAML files (`load_directory`, dev tenant only) or the live packs in Postgres
+(`load_rows`). M5 adds the publish event and the poll; they call the same `put`, so `get` doesn't change."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -63,4 +63,20 @@ class PackCache:
                 self.load_errors[(tenant_id, path.stem)] = f"can't read {path.name}: {e}"
                 continue
             loaded += self.put(tenant_id, pack, version, name=path.stem)
+        return loaded
+
+    def load_rows(self, rows: list[dict]) -> int:
+        """Load live packs read from Postgres ([{tenant_id, domain, version, yaml}]). Returns how many went live."""
+        loaded = 0
+        for row in rows:
+            try:
+                pack = yaml.safe_load(row["yaml"])
+            except yaml.YAMLError as e:
+                self.load_errors[(row["tenant_id"], row["domain"])] = f"stored YAML can't be parsed: {e}"
+                continue
+            if not isinstance(pack, dict) or pack.get("domain") != row["domain"]:
+                # never serve a pack under a different name than the one it was stored and approved as
+                self.load_errors[(row["tenant_id"], row["domain"])] = "stored pack's domain doesn't match its row"
+                continue
+            loaded += self.put(row["tenant_id"], pack, row["version"], name=row["domain"])
         return loaded

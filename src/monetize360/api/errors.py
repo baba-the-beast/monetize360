@@ -39,9 +39,11 @@ _REQUEST_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 class ApiError(Exception):
     """An error raised by the API layer itself (auth, unknown pack, bad body)."""
 
-    def __init__(self, status: int, code: str, message: str, details: list[dict] | None = None):
+    def __init__(self, status: int, code: str, message: str, details: list[dict] | None = None,
+                 headers: dict[str, str] | None = None):
         super().__init__(message)
         self.status, self.code, self.message, self.details = status, code, message, details or []
+        self.headers = headers or {}
 
 
 def pack_not_found(domain: str) -> ApiError:
@@ -80,9 +82,11 @@ def request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "")
 
 
-def _respond(request: Request, status: int, body: dict[str, Any]) -> JSONResponse:
+def _respond(request: Request, status: int, body: dict[str, Any],
+             headers: dict[str, str] | None = None) -> JSONResponse:
     rid = request_id(request)
-    return JSONResponse({**body, "request_id": rid}, status_code=status, headers={"X-Request-Id": rid})
+    return JSONResponse({**body, "request_id": rid}, status_code=status,
+                        headers={**(headers or {}), "X-Request-Id": rid})
 
 
 def install(app: FastAPI) -> None:
@@ -97,7 +101,7 @@ def install(app: FastAPI) -> None:
 
     @app.exception_handler(ApiError)
     async def api_error(request: Request, e: ApiError):
-        return _respond(request, e.status, error_body(e.code, e.message, e.details))
+        return _respond(request, e.status, error_body(e.code, e.message, e.details), e.headers)
 
     @app.exception_handler(EngineError)
     async def engine_error(request: Request, e: EngineError):

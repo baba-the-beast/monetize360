@@ -56,6 +56,7 @@ api ──► control ──► engine ◄── workers
 | Cache / queue / events | **Redis** | 7 | One tool for signals (TTL), rate limits, audit stream, pub/sub | Kafka (heavy), RabbitMQ (second tool) | free to self-host¹ |
 | IDs | **python-ulid** | 2.7 | Sortable by time, unique across replicas without coordination | UUID4 (not sortable), DB sequences (needs DB on hot path) | MIT |
 | Calendar signals | **built-in festival table** | — | Offline, and versioned with the engine so old prices replay identically | `holidays` lib (its dates change between versions → replay drift), calendar APIs | — |
+| Timezones | **tzdata** | 2024.1 | IANA zones for the pack `timezone` (Windows and slim Docker images ship none) | system tz files (missing on Windows / slim images) | Apache-2.0 |
 | Metrics | **prometheus-client** | 0.20 | `/metrics` endpoint, industry standard | — | Apache-2.0 |
 | Load balancer | **nginx** | 1.27 | Round-robin, retries failed replica, path routing | Traefik (fine too, more config) | BSD |
 | Containers | **Docker** + Compose | — | `docker compose up` runs the whole system | — | Apache-2.0² |

@@ -198,8 +198,8 @@ def test_key_lookup_function_returns_one_key_and_nothing_else(database):
 
 # ---------------------------------------------------------------- Postgres goes down
 
-def test_when_the_database_is_unreachable_known_keys_still_price(database):
-    app = create_pricing_app(database_url=database.app_url)
+def test_when_the_database_is_unreachable_known_keys_still_price(database, tmp_path):
+    app = create_pricing_app(database_url=database.app_url, audit_spool_dir=tmp_path)
     with TestClient(app) as c:
         known = {"Authorization": f"Bearer {database.keys['hotel_001']['pricing']}"}
         unseen = {"Authorization": f"Bearer {database.keys['airline_002']['pricing']}"}

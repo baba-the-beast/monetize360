@@ -29,9 +29,9 @@ def database():
 
 
 @pytest.fixture(scope="session")
-def app(database):
-    from monetize360.api.app import create_pricing_app
-    return create_pricing_app(database_url=database.app_url)
+def app(database, tmp_path_factory):
+    from monetize360.api.app import create_app
+    return create_app(database_url=database.app_url, audit_spool_dir=tmp_path_factory.mktemp("spool"))
 
 
 @pytest.fixture(scope="session")

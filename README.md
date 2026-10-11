@@ -53,9 +53,9 @@ Needs a local PostgreSQL 16 and a git-ignored `.env.local` holding `PG_SUPERUSER
 python scripts/setup_local_db.py          # creates the database from deploy/postgres/init/*.sql
 python scripts/seed_demo.py               # 3 demo tenants, their packs and keys -> .demo-keys.json (git-ignored)
 # PowerShell:  $env:DATABASE_URL = "<DATABASE_URL from .env.local>"
-uvicorn --factory monetize360.api.app:create_pricing_app --port 8000
+uvicorn --factory monetize360.api.app:create_app --port 8000      # pricing + audit in one process
 # http://localhost:8000/docs  ->  Authorize  ->  paste a key from .demo-keys.json
-pytest -m integration                     # 32 tests against the real database (recreates monetize360_test)
+pytest -m integration                     # against the real database (recreates monetize360_test)
 ```
 
 | Demo tenant | Domains | Try |
@@ -68,6 +68,23 @@ With `DATABASE_URL` set, the tenant comes only from the API key and `DEV_TENANT`
 down, keys this replica has already seen keep pricing; unseen keys get 503 `auth_unavailable`.
 Not yet: shared rate limits and instant cross-replica revocation (Redis, M5) — until then a revoked key can
 live up to 60 s on other replicas and the rate limit is per replica.
+
+### Audit, replay and tamper detection (M6)
+
+Every `/v1/price` appends a row to a hash chain in Postgres before it answers (about 3 ms). With an `admin` key:
+
+| Call | Shows |
+|---|---|
+| `GET /v1/audit/{price_id}` | the inputs, where each signal came from, the rule version and who approved it |
+| `POST /v1/replay {"price_id": "..."}` | the same price again, from the record alone (`identical: true`) |
+| `POST /v1/audit/verify {"domain": "hotel"}` | the whole chain checked; an edited, removed or inserted row is named |
+| `GET /v1/audit/export?domain=hotel&format=csv` | your data, to take anywhere |
+
+Tamper demo: as the database owner run
+`UPDATE audit_log SET output = jsonb_set(output, '{price}', '"1.00"') WHERE price_id = '...'`, then call
+`/v1/audit/verify` — it reports that row. (The application's own account gets `permission denied`.)
+If Postgres is unreachable prices are still returned; their records wait in `.audit-spool/` and are appended
+when it is back.
 
 ## Golden rule
 

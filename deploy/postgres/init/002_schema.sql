@@ -62,6 +62,7 @@ CREATE TABLE audit_log (
     seq              bigint NOT NULL,                     -- position in the (tenant, domain) chain
     pack_version     integer NOT NULL,
     entity           text,
+    key_id           text,                                -- which API key asked for this price
     as_of            timestamptz NOT NULL,
     inputs           jsonb NOT NULL,
     signal_sources   jsonb NOT NULL,

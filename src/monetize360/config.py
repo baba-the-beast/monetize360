@@ -19,6 +19,7 @@ class Settings:
     pack_poll_seconds: int
     pack_schema_path: Path
     packs_dir: Path
+    audit_spool_dir: Path
     dev_tenant: str | None
 
 
@@ -34,6 +35,8 @@ def settings() -> Settings:
         # default works for a dev checkout; Docker sets PACK_SCHEMA_PATH (.env.example)
         pack_schema_path=Path(env.get("PACK_SCHEMA_PATH", REPO_ROOT / "packs/schema/pack.schema.json")),
         packs_dir=Path(env.get("PACKS_DIR", REPO_ROOT / "packs/templates")),
+        # where audit records wait when Postgres is unreachable (one file per process)
+        audit_spool_dir=Path(env.get("AUDIT_SPOOL_DIR", REPO_ROOT / ".audit-spool")),
         # Until API keys exist (M4) the API is CLOSED unless a dev tenant is named here: every caller is then that
         # tenant and its packs come from PACKS_DIR. Never set in production.
         dev_tenant=env.get("DEV_TENANT") or None,

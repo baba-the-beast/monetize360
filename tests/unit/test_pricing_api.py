@@ -56,7 +56,8 @@ def test_price_has_an_id_and_says_what_it_could_not_enforce(client):
     assert body["price"] == "4950.00"
     assert body["bounds"] == {"lower": "2100.00", "upper": "5000.00"}     # no anchor -> floor 70% of base
     assert body["flags"] == ["max_change not enforced: no price-anchor store configured",
-                             "idempotency_key not honoured: no shared store configured"]
+                             "idempotency_key not honoured: no shared store configured",
+                             "not audited: no database configured"]        # dev-tenant mode has no database
     assert client.post("/v1/price/hotel", json=HOTEL).json()["price_id"] != body["price_id"]
 
 

@@ -13,3 +13,4 @@ build/
 bench/results/
 .env.local
 .demo-keys.json
+.audit-spool/

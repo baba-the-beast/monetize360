@@ -20,8 +20,10 @@ from monetize360.api.schemas import (
     SimulateRequest,
     SimulateResponse,
 )
+from monetize360.control.replay import output_of
 from monetize360.engine import Context, EngineError, evaluate, explain
 from monetize360.security.principal import Principal
+from monetize360.store.audit import AuditEvent, AuditLog
 from monetize360.store.packcache import LivePack
 
 router = APIRouter(prefix="/v1", tags=["pricing"])
@@ -30,6 +32,9 @@ VALID_FOR = timedelta(minutes=15)
 PRICES = Counter("m360_prices_total", "Price evaluations", ["domain", "kind", "outcome"])
 SECONDS = Histogram("m360_price_seconds", "Time to evaluate and explain one price", ["kind"],
                     buckets=(0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1))
+AUDIT_SECONDS = Histogram("m360_audit_seconds", "Time to append one audit record",
+                          buckets=(0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1))
+AUDIT = Counter("m360_audit_records_total", "Audit records by where they went", ["where"])
 pricing_key = require_principal("pricing")
 Domain = Annotated[str, Path(description="Pack domain, e.g. hotel, airline, ride", examples=["hotel"],
                              json_schema_extra={"example": "hotel"})]
@@ -43,7 +48,8 @@ def _utc(t: datetime) -> str:
     return t.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _price(pack: LivePack, req: PriceRequest, *, simulate: bool) -> dict[str, Any]:
+def _price(pack: LivePack, req: PriceRequest, *, simulate: bool, principal: Principal | None = None,
+           audit: AuditLog | None = None) -> dict[str, Any]:
     """Evaluate one request. Raises EngineError / ApiError; the caller decides how to report them."""
     kind = "simulate" if simulate else "price"
     domain = pack.compiled.domain
@@ -71,29 +77,49 @@ def _price(pack: LivePack, req: PriceRequest, *, simulate: bool) -> dict[str, An
     SECONDS.labels(kind).observe(time.perf_counter() - started)
     PRICES.labels(domain, kind, "ok").inc()
 
+    out = output_of(result)                    # exactly what is audited and compared on replay
+    price_id = None
+    if not simulate:
+        price_id = str(ULID())
+        if audit is None:
+            flags.append("not audited: no database configured")
+        else:
+            event = AuditEvent(
+                price_id=price_id, tenant_id=principal.tenant_id, domain=domain, pack_version=pack.version,
+                entity=req.entity, key_id=principal.key_id, as_of=as_of,
+                inputs={"base_price": req.base_price, "signals": req.signals, "redis_signals": {},
+                        "allow_public_override": False, "policy": None},
+                signal_sources=result.signals_used, reference_price=reference, output=out)
+            started = time.perf_counter()
+            stored = audit.record(event)
+            AUDIT_SECONDS.observe(time.perf_counter() - started)
+            AUDIT.labels("database" if stored else "spool").inc()
+            if not stored:
+                flags.append("audit deferred: database unreachable, record spooled")
+
     body: dict[str, Any] = {
-        "price": _money(result.price),
-        "currency": result.currency,
+        "price": out["price"],
+        "currency": out["currency"],
         "domain": domain,
         "pack_version": pack.version,
         "valid_until": _utc(as_of + VALID_FOR),
-        "waterfall": [{"step": r.step, "kind": r.kind, "delta": _money(r.delta), "after": _money(r.after),
-                       "reason": r.reason} for r in result.waterfall],
+        "waterfall": out["waterfall"],
         "counterfactuals": [{"if": c["if"], "price": _money(c["price"])} if "price" in c else jsonable(c)
                             for c in counterfactuals],
         "signals_used": jsonable(result.signals_used),
-        "bounds": {"lower": _money(result.bounds["lower"]), "upper": _money(result.bounds["upper"])},
-        "flags": [*result.flags, *flags],
+        "bounds": out["bounds"],
+        "flags": [*out["flags"], *flags],
     }
-    if not simulate:
-        body = {"price_id": str(ULID()), **body}
+    if price_id is not None:
+        body = {"price_id": price_id, **body}
     return body
 
 
 @router.post("/price/{domain}", response_model=PriceResponse)
 def price(domain: Domain, body: PriceRequest, request: Request,
           principal: Principal = Depends(pricing_key)) -> dict[str, Any]:   # noqa: B008
-    return _price(live_pack(request, principal, domain), body, simulate=False)
+    return _price(live_pack(request, principal, domain), body, simulate=False, principal=principal,
+                  audit=request.app.state.audit)
 
 
 @router.post("/price/{domain}/batch", response_model=BatchResponse)
@@ -103,7 +129,8 @@ def price_batch(domain: Domain, body: BatchRequest, request: Request,
     results: list[dict[str, Any]] = []
     for item in body.items:
         try:
-            results.append(jsonable(_price(pack, PriceRequest.model_validate(item), simulate=False)))
+            results.append(jsonable(_price(pack, PriceRequest.model_validate(item), simulate=False,
+                                           principal=principal, audit=request.app.state.audit)))
         except ValidationError as e:
             details = [{"path": ".".join(str(p) for p in err["loc"]), "message": err["msg"]} for err in e.errors()]
             results.append(error_body("bad_request", "the item is not a valid price request", details))

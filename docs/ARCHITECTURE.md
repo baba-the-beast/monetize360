@@ -93,7 +93,7 @@ Company backend ──(API key)──► pricing-api ──► price + waterfall
  Observability: Prometheus /metrics on every service (free).
 ```
 
-**Three processes, one codebase.** `pricing-api`, `control-api` and `audit-worker` all import the same `engine/` package. This is not microservice sprawl — it's one program started in three modes.
+**One codebase, started in different modes.** `pricing-api` and `control-api` (or `create_app`, both in one process for local demos) all import the same `engine/` package. This is not microservice sprawl — it's one program started in three modes.
 
 ---
 
@@ -359,7 +359,7 @@ lambdas, comprehensions, `**`, walrus, Python's `and/or/not/is/if` — is reject
 | 9 | Round | step + mode + optional ending (₹49 / ₹99), never leaving the guard interval |
 | 10 | Self-check | waterfall invariant (section 8) — fail → 500, never a wrong price |
 | 11 | Explain | waterfall + up to 5 counterfactuals |
-| 12 | Audit | XADD to the shard's Redis stream, update `anchor:` / `last:`, store `idem:`; respond |
+| 12 | Audit | append the row to the (tenant, domain) hash chain in Postgres (§11.1); respond |
 
 The engine's own stages are exactly ENGINE_SPEC's: **base → adjust → guard → round → self-check**. Steps 1–4 and 12 belong to the API layer.
 
@@ -502,27 +502,49 @@ Scale down to **2 replicas** (high availability, no cold start). Audit worker �
 
 ## 11. Audit, replay and tamper detection
 
-### 11.1 Hash chain without slowing pricing
-If 50 replicas all appended to one chain they'd block each other. So replicas just push events to a Redis stream; a single **audit-worker** per shard builds the chain and batch-inserts:
+### 11.1 Hash chain: written to Postgres in the same request
+
+**As built (changed from the first design).** Every `/price` appends its audit row to Postgres before it
+answers. Redis is **not** in the audit path.
 
 ```
-record.hash = SHA-256( prev_hash + canonical_json(record) )
+record.hash = SHA-256( prev_hash + canonical_json(record) )        first row: prev_hash = 32 zero bytes
 ```
 
-Editing any row breaks its hash and every hash after it.
+Editing, removing or inserting a row breaks its hash and every hash after it; `/v1/audit/verify` names the
+first bad row and why.
 
-**Ordering rule.** One chain per `(tenant, domain)`. Its events always go to stream `audit:{shard}` with
-`shard = hash(tenant, domain) % N` (N = 16, fixed). Each shard is read by **exactly one** worker (it holds a
-Redis lease, renewed every few seconds). A Redis consumer group would spread one chain across workers and
-scramble the order, so we don't use one for this. More workers = shards split between them; a dead worker's
-lease expires and another takes over its shards.
+**Why not the Redis stream + worker we first drew.** Two measured facts changed the decision:
 
-**Restart safety.** On start (or takeover) the worker reads the last `(seq, hash)` of each chain from
-Postgres and resumes from the last ACKed stream entry. Each event carries its own `issued_at`, used as
-`created_at`, so re-inserting an event after a crash hits the primary key and is skipped
-(`ON CONFLICT DO NOTHING`) instead of creating a duplicate.
+| | Redis stream + worker (first design) | Postgres in the request (as built) |
+|---|---|---|
+| A price is durable | ~1 s later, and only if Redis persists to disk | before the response is sent |
+| If the queue is lost | prices exist with no record | nothing to lose: there is no queue |
+| Moving parts | Redis streams, leases, shards, a worker | one INSERT |
+| Cost | none on the request | **~3 ms** per price (measured: p50 7 ms with audit vs 3.6 ms without) |
 
-Trade-off (stated openly): up to ~1 s between "price returned" and "audit durable". Redis append-only persistence keeps loss risk tiny. A per-tenant **sync mode** (write to Postgres before responding) is the production answer for tenants who need zero loss — designed, **not built in the 12 hours**.
+A hosted Redis without persistence (and 140 ms away) made the first design unsafe; a local Postgres makes the
+second one cheap. "Every price is audited" is a promise, so we pay 3 ms for it.
+
+**One chain, many writers.** One chain per `(tenant, domain)`. Appends to a chain are serialised by a Postgres
+advisory lock (`pg_advisory_xact_lock`), which works across replicas: two servers and eight threads writing
+200 prices produce rows 1..200 with no gap and a valid chain (tested).
+Ceiling, stated openly: one append at a time per chain (~1 ms each). A single domain needing thousands of
+prices per second would batch appends in a worker — the upgrade path, not built.
+
+**If Postgres is unreachable.** The price is still returned; its record is written to a local spool file
+(fsynced, one folder per database) and the response carries the flag
+`audit deferred: database unreachable, record spooled`. A background thread appends spooled records, in order
+and exactly once, when the database is back. Replicas with disposable disks would lose a spool on scale-in:
+in Kubernetes the spool directory must be a persistent volume.
+
+**What the chain does not catch:** deleting the newest rows (the tail). Publishing the head hash somewhere
+else from time to time would; not built. And the application account cannot edit or delete audit rows at all
+(no UPDATE / DELETE grant) — the chain is the second line of defence, for someone with owner access.
+
+**What a record holds:** price_id, pack version, entity, API key id, `as_of`, the inputs exactly as received
+(numbers kept as text so they come back unchanged), where each signal came from, the reference price, and
+the full output. That is everything `POST /v1/replay` needs to reproduce the price.
 
 ### 11.2 Endpoints
 | Endpoint | Does |
@@ -549,8 +571,8 @@ We don't claim legal compliance (that's the customer's lawyers' call). We provid
 |---|---|---|
 | One pricing replica | ✅ | nginx stops routing to it; replaced |
 | A signal goes stale | ✅ | Per-signal `on_stale` policy; flag in response |
-| Redis down | ✅ degraded | Packs in RAM; Redis signals → `on_stale` policy + flag; `max_change` anchor from per-replica memory (weaker, flagged); idempotency not enforced (flagged); rate limit per-replica. Audit events go to a **bounded in-memory buffer**, flushed when Redis returns; on overflow or replica crash they are lost and counted in `audit_records_dropped_total` (alert). Not local disk: replicas are disposable and scale-in deletes their disk |
-| Postgres down | ✅ | Hot path never reads it. Publish/rollback/audit queries pause |
+| Redis down | ✅ | Redis only broadcasts events (key revoked, pack published, kill switch). Without it replicas learn of those by the 60 s key-cache expiry and the 10 s pack poll instead of instantly. Nothing is stored only in Redis, so nothing is lost |
+| Postgres down | ✅ | Packs are in memory, so pricing continues. API keys this replica has already seen keep working (unseen keys: 503 `auth_unavailable`). Audit rows go to a local spool and are appended when Postgres returns (response flag `audit deferred`). Publish, rollback, audit queries and replay pause |
 | Bad rule published | ✅ | Lint + verify + impact preview should stop it; guards clamp it anyway; kill switch; one-call rollback |
 | New pack fails to load | ✅ | Replica keeps last known good version, raises alert |
 | Engine bug | ✅ no wrong price | Self-check fails → `500 invariant_violation`, no price returned |

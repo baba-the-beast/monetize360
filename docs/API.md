@@ -122,10 +122,10 @@ Same response **without** `price_id`; nothing is audited, `reference_price` may 
 
 | Method & path | Response |
 |---|---|
-| `GET /v1/audit/{price_id}` | full record: inputs, signals_used, reference_price, pack_version, owner, approver, waterfall, hash, prev_hash |
-| `POST /v1/audit/verify` `{ "domain": "hotel" }` | `{ ok: true, rows_checked }` or `{ ok: false, first_broken_seq, price_id }` |
-| `GET /v1/audit/export?domain=hotel&format=csv\|json&from=&to=` | file download |
-| `POST /v1/replay` `{ "price_id": "...", "pack_version": 4? }` | `{ original, replayed, identical: true/false, diff }` — never writes audit |
+| `GET /v1/audit/{price_id}` | full record: `price_id, domain, seq, entity, key_id, as_of, recorded_at, pack_version, pack_owner, pack_approver, inputs, signals_used, reference_price, output {price, currency, waterfall, bounds, flags}, prev_hash, hash` |
+| `POST /v1/audit/verify` `{ "domain": "hotel" }` | `{ ok: true, rows_checked, head_hash }` or `{ ok: false, rows_checked, first_broken_seq, price_id, reason }` — reason says whether the row was changed, removed or inserted |
+| `GET /v1/audit/export?domain=hotel&format=csv\|json&from=&to=` | up to 10,000 rows per call (`X-Truncated` header); CSV cells that start with `= + - @` are prefixed with `'` so a spreadsheet can't run them |
+| `POST /v1/replay` `{ "price_id": "...", "pack_version": 4? }` | `{ price_id, recorded_pack_version, replayed_pack_version, original, replayed, identical, diff: [{field, original, replayed}] }` — never writes audit |
 
 ## Admin (role: `admin`)
 

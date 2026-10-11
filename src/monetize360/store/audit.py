@@ -143,6 +143,17 @@ def rows(db: Database, tenant_id: str, domain: str, *, start: datetime | None = 
             "ORDER BY seq LIMIT %s", (domain, start, start, end, end, limit)).fetchall()
 
 
+def recent_requests(db: Database, tenant_id: str, domain: str, limit: int) -> list[dict[str, Any]]:
+    """The newest `limit` priced requests, as control/impact.py reads them (to re-price with a draft pack)."""
+    with db.tenant(tenant_id) as conn:
+        found = conn.execute(
+            "SELECT price_id, as_of, inputs, reference_price, output->>'price' AS price FROM audit_log "
+            "WHERE domain = %s ORDER BY seq DESC LIMIT %s", (domain, limit)).fetchall()
+    return [{"price_id": r["price_id"], "as_of": r["as_of"], "base_price": r["inputs"].get("base_price"),
+             "signals": r["inputs"].get("signals") or {}, "redis_signals": r["inputs"].get("redis_signals") or {},
+             "reference_price": r["reference_price"], "price": r["price"]} for r in found]
+
+
 def verify(db: Database, tenant_id: str, domain: str) -> dict[str, Any]:
     """Walk the whole chain. The first row that doesn't fit is reported with the reason."""
     prev, expected_seq, checked = GENESIS, 1, 0

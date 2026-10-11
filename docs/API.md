@@ -101,24 +101,35 @@ item is either a price response or `{ "error": ... }`. One bad item doesn't fail
 
 ### `POST /v1/simulate/{domain}`
 
-Same body as `/price` plus optional `"pack_version": 4` (try a draft) and public-signal overrides allowed.
+Same body as `/price` plus optional `"pack_version": 4` (any stored version of your pack: a draft, the live one or an old one) and public-signal overrides allowed.
 Same response **without** `price_id`; nothing is audited, `reference_price` may be given explicitly.
 
 ---
 
 ## Packs (role: `editor` unless stated)
 
+The rule lifecycle: **draft → lint → verify → (impact) → approve → publish → rollback**. Identity is the API
+key: `owner` and `approver` are key ids, and they must differ. A stored version's YAML never changes.
+
 | Method & path | Body → Response |
 |---|---|
-| `GET /v1/packs/{domain}` | → `{ live_version, versions: [{version, status, owner, approver, created_at}] }` |
-| `GET /v1/packs/{domain}/{version}` | → `{ version, status, yaml, lint_report, verify_report }` |
-| `PUT /v1/packs/{domain}` | YAML text (`Content-Type: application/yaml`) → `201 { version, status: "draft" }` or 422 `pack_invalid` with every schema error |
-| `POST /v1/packs/{domain}/{version}/lint` | → `{ ok, errors: [{code, path, message}], warnings: [...] }` — any error blocks publish. Codes: `schema`, `compile`, `fairness`, `personal_data`, `banned_signal`, `tenant_limit`, `exclusive_overlap`; warnings `fairness_proxy`, `unreachable`, `shadowed`, `expired`, `missing_default`, `max_base_price`, `band_gap`, `lookup_gap`, `unused_signal` |
-| `POST /v1/packs/{domain}/{version}/verify` | `{ "cases": 10000 }` → `{ ok, cases, violations: [...first 10 {kind, message, input}], violation_counts, rejected_inputs, smallest: {kind, message, input} \| null, badge: "verified_safe" \| null, properties, base_price_range, seconds }` — about 4 s for 10,000 cases; deterministic per pack |
-| `POST /v1/packs/{domain}/{version}/impact` | `{ "last_n": 1000 }` → `{ compared, up_pct, down_pct, unchanged_pct, change_p10, change_p50, change_p90, new_floor_hits, new_ceiling_hits, would_fail, failures, replay_mismatches, biggest_movers }` |
-| `POST /v1/packs/{domain}/{version}/approve` | role `approver`, must differ from author → `{ status: "approved" }` |
-| `POST /v1/packs/{domain}/{version}/publish` | role `approver`; requires lint ok + verify ok + approved → `{ live_version }` |
-| `POST /v1/packs/{domain}/rollback` | role `approver`, `{ "to_version": 2 }` → `{ live_version }` |
+| `GET /v1/packs` | → `{ domains: [{ domain, live_version, latest_version, versions }] }` |
+| `GET /v1/packs/{domain}` | → `{ domain, live_version, versions: [{ version, status, owner, approver, lint_ok, verify_ok, created_at, approved_at, published_at }] }` — status: `draft`, `approved`, `published` (live), `archived` (was live) |
+| `GET /v1/packs/{domain}/{version}` | → `{ domain, version, status, owner, approver, is_live, live_version, yaml, lint_report, verify_report, diff_from_live, created_at, approved_at, published_at }` — `diff_from_live` is a unified diff of the YAML |
+| `PUT /v1/packs/{domain}` | YAML text (`Content-Type: application/yaml`, max 256 KB) → `201 { domain, version, status: "draft", owner }`. Must pass the schema **and** compile, or nothing is stored: `422 pack_invalid` lists every problem with its path. YAML anchors/aliases are refused |
+| `POST /v1/packs/{domain}/{version}/lint` | → `{ ok, errors: [{code, path, message}], warnings: [...] }` — any error blocks approval. Uses the tenant's limits and banned signals. Codes: `schema`, `compile`, `fairness`, `personal_data`, `banned_signal`, `tenant_limit`, `exclusive_overlap`; warnings `fairness_proxy`, `unreachable`, `shadowed`, `expired`, `missing_default`, `max_base_price`, `band_gap`, `lookup_gap`, `unused_signal` |
+| `POST /v1/packs/{domain}/{version}/verify` | `{ "cases": 10000 }` (100–20,000) → `{ ok, cases, violations: [...first 10 {kind, message, input}], violation_counts, rejected_inputs, smallest: {kind, message, input} \| null, badge: "verified_safe" \| null, properties, base_price_range, seconds }` — about 2.5 s for 10,000 cases; deterministic per pack |
+| `POST /v1/packs/{domain}/{version}/impact` | `{ "last_n": 1000 }` → `{ domain, version, compared_with_live_version, compared, up_pct, down_pct, unchanged_pct, change_p10, change_p50, change_p90, new_floor_hits, new_ceiling_hits, would_fail, failures, replay_mismatches, biggest_movers }` — re-prices your most recent real requests with this version |
+| `POST /v1/packs/{domain}/{version}/approve` | role `approver` → `{ version, status: "approved", owner, approver }`. `409 checks_required` (lint or verify missing or failing), `409 same_person` (approver = author), `409 not_a_draft` |
+| `POST /v1/packs/{domain}/{version}/publish` | role `approver` → `{ live_version, previous_version, broadcast }`. Lint is run again first. `409 approval_required`, `409 already_live`, `409 not_approved`, `409 checks_required` |
+| `POST /v1/packs/{domain}/rollback` | role `approver`, `{ "to_version": 2 }` → `{ live_version, previous_version, broadcast }`. Only to a version that was live before: `409 never_live`, `409 already_live` |
+
+After publish or rollback the replica that handled it switches at once; the others are told through Redis
+(`broadcast: true`) or find out by polling Postgres every `PACK_POLL_SECONDS` (10 s). A replica that can't
+load a new version keeps pricing with the one it has.
+
+`POST /v1/simulate/{domain}` with `"pack_version": N` prices with any stored version of your pack — a draft
+included — so a change can be tried before anyone approves it.
 
 ---
 

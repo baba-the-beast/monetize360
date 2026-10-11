@@ -103,6 +103,24 @@ With an `admin` key: `POST /v1/admin/keys` (the new key is shown once), `GET /v1
 refused by every other server within milliseconds; without Redis they find out within 60 seconds. Redis only
 carries these announcements: nothing is stored in it and no price request waits for it.
 
+### Changing rules: draft → lint → verify → approve → publish → rollback
+
+```sh
+curl -X PUT  localhost:8000/v1/packs/hotel -H "Authorization: Bearer <editor key>" \
+     -H "Content-Type: application/yaml" --data-binary @packs/templates/hotel.yaml       # -> {"version": 2, "status": "draft"}
+curl -X POST localhost:8000/v1/packs/hotel/2/lint     -H "Authorization: Bearer <editor key>"
+curl -X POST localhost:8000/v1/packs/hotel/2/verify   -H "Authorization: Bearer <editor key>"      # 10,000 cases, ~2.5 s
+curl -X POST localhost:8000/v1/packs/hotel/2/impact   -H "Authorization: Bearer <editor key>"      # what real prices would change
+curl -X POST localhost:8000/v1/packs/hotel/2/approve  -H "Authorization: Bearer <approver key>"    # not the author's key
+curl -X POST localhost:8000/v1/packs/hotel/2/publish  -H "Authorization: Bearer <approver key>"    # live on every server
+curl -X POST localhost:8000/v1/packs/hotel/rollback   -H "Authorization: Bearer <approver key>" \
+     -H "Content-Type: application/json" -d '{"to_version": 1}'
+```
+
+A draft prices nothing, but `POST /v1/simulate/hotel` with `"pack_version": 2` tries it. A new industry is the
+same steps on a new domain name: `PUT /v1/packs/ev_charging` ... publish, and `/v1/price/ev_charging` works with
+no restart and no engine change. Prices issued under an old version still replay under that version.
+
 ## Golden rule
 
 Humans write `tests/golden/*.yaml` by hand first. Code (AI-assisted or not) is done when

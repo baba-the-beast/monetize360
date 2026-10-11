@@ -325,6 +325,35 @@ copy a template (hotel / airline / ride / retail / parking / EV)
 
 ---
 
+### 5.5 As built
+
+The lifecycle is `control/publisher.py` + `store/packs.py` + `routes/packs.py`, all against Postgres:
+
+- **A draft that isn't valid is never stored.** `PUT` runs the schema, then compiles; every problem comes back
+  with its path. YAML anchors and aliases are refused (a few lines can otherwise expand into gigabytes).
+- **Versions are immutable.** The application account has no UPDATE on `yaml`, `owner` or `version`; "live" is one
+  row in `pack_pointer`, so publish and rollback are each one atomic change.
+- **Two people, enforced twice.** The publisher refuses an approver who is the author, and Postgres has
+  `CHECK (approver <> owner)` and `CHECK (status = 'draft' OR approver IS NOT NULL)`: no pack can be approved or
+  live on one person's say-so even if the application were wrong. "Person" here is an API key; a company that
+  gives one human two keys defeats it, which only user accounts would fix.
+- **Checks belong to a version.** Lint and verify reports are stored on the version they ran against; approval
+  needs both to have passed, and publish runs lint again because the tenant's limits may have changed.
+- **Approve, publish and rollback each run inside one locked transaction** per (tenant, domain), so two at once
+  can't both act on what they read before the other finished. Eight drafts saved at the same instant get eight
+  different version numbers (tested).
+- **Hot reload.** The replica that handled the publish switches immediately. The others hear a `pack_published`
+  broadcast (measured: 0.03 s) or, without Redis, find the change by polling Postgres every 10 s. The message
+  carries no pack: it only says "look again", so it can't inject rules. A replica that fails to load a new
+  version keeps the last good one.
+- **Old prices stay explainable.** An audit row records the version that priced it; replay uses that version,
+  and `POST /v1/replay` with another version shows what would have differed.
+- **Try before you publish.** `/v1/simulate` with `pack_version` prices with any stored version, including a draft.
+
+Measured on the running server: publish to "pricing with the new version" is one request (the 1.1 s it took
+was the Redis round trip); 10,000-case verify 2.5 s; a brand-new domain (EV charging) went from 404 to priced
+through these same calls with no restart and an empty `git diff engine/`.
+
 ## 6. Rule expressions — why CEL  *(answers Q5)*
 
 Rules need conditions like `occupancy > 0.8 && is_weekend`. These are written by business users, so they are **untrusted text**. Options:

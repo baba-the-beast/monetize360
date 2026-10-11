@@ -80,3 +80,10 @@ class PackCache:
                 continue
             loaded += self.put(row["tenant_id"], pack, row["version"], name=row["domain"])
         return loaded
+
+    def sync_rows(self, rows: list[dict]) -> int:
+        """Bring the cache in line with the live packs read from Postgres: load only what is new or changed.
+        A version that fails to load leaves the previous one in place. Returns how many were swapped in."""
+        changed = [r for r in rows
+                   if (current := self.get(r["tenant_id"], r["domain"])) is None or current.version != r["version"]]
+        return self.load_rows(changed)

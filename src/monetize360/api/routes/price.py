@@ -26,10 +26,11 @@ from monetize360.api.schemas import (
     SimulateRequest,
     SimulateResponse,
 )
+from monetize360.control import publisher
 from monetize360.control.replay import output_of
-from monetize360.engine import Context, EngineError, Result, SignalInvalid, evaluate, explain
+from monetize360.engine import Context, EngineError, Result, SignalInvalid, compile_pack, evaluate, explain
 from monetize360.security.principal import Principal
-from monetize360.store import idempotency, pricestate
+from monetize360.store import idempotency, packs, pricestate
 from monetize360.store.audit import AuditEvent, AuditLog, append_in, plain
 from monetize360.store.packcache import LivePack
 
@@ -200,7 +201,25 @@ def price_batch(domain: Domain, body: BatchRequest, request: Request,
 @router.post("/simulate/{domain}", response_model=SimulateResponse)
 def simulate(domain: Domain, body: SimulateRequest, request: Request,
              principal: Principal = Depends(pricing_key)) -> dict[str, Any]:   # noqa: B008
-    pack = live_pack(request, principal, domain)
-    if body.pack_version is not None and body.pack_version != pack.version:
-        raise pack_not_found(domain)          # drafts and old versions need the pack store (M5)
-    return _simulate(pack, body)
+    if body.pack_version is None:
+        return _simulate(live_pack(request, principal, domain), body)
+    return _simulate(_stored_pack(request, principal, domain, body.pack_version), body)
+
+
+def _stored_pack(request: Request, principal: Principal, domain: str, version: int) -> LivePack:
+    """Any stored version of the caller's own pack - a draft, or an old one - for a what-if. Never audited."""
+    cache = request.app.state.packs
+    live = cache.get(principal.tenant_id, domain) if principal.allows(domain) else None
+    if live is not None and live.version == version:
+        return live
+    db = request.app.state.db
+    if db is None or not principal.allows(domain):
+        raise pack_not_found(domain)
+    row = packs.get_version(db, principal.tenant_id, domain, version)
+    if row is None:
+        raise pack_not_found(domain)
+    try:
+        pack, _ = publisher.parse(row["yaml"], domain)
+    except publisher.LifecycleError as e:
+        raise ApiError(e.status, e.code, e.message, e.details) from None
+    return LivePack(compile_pack(pack), version)

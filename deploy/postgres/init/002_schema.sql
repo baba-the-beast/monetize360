@@ -45,8 +45,11 @@ CREATE TABLE packs (
     lint_report    jsonb,
     verify_report  jsonb,
     created_at     timestamptz NOT NULL DEFAULT now(),
+    approved_at    timestamptz,
+    published_at   timestamptz,
     PRIMARY KEY (tenant_id, domain, version),
-    CHECK (approver IS NULL OR approver <> owner)          -- two-person rule
+    CHECK (approver IS NULL OR approver <> owner),         -- two-person rule
+    CHECK (status = 'draft' OR approver IS NOT NULL)       -- nothing is approved or live without an approver
 );
 
 CREATE TABLE pack_pointer (                                -- what "live" means; rollback = UPDATE this
@@ -115,7 +118,8 @@ GRANT SELECT ON tenants TO m360_app;                           -- tenants are cr
 GRANT SELECT, INSERT, UPDATE ON tenant_policy, pack_pointer TO m360_app;
 GRANT SELECT, INSERT ON api_keys TO m360_app;
 GRANT UPDATE (revoked_at, revoked_by) ON api_keys TO m360_app;   -- create and revoke; never rewrite secret, role, scope
-GRANT SELECT, INSERT, UPDATE (status, approver, compiled, lint_report, verify_report) ON packs TO m360_app;
+GRANT SELECT, INSERT, UPDATE (status, approver, compiled, lint_report, verify_report, approved_at, published_at)
+    ON packs TO m360_app;                                     -- never yaml, owner or version: versions are immutable
 GRANT SELECT, INSERT ON audit_log TO m360_app;                -- no UPDATE, no DELETE
 GRANT SELECT, INSERT, UPDATE ON price_state TO m360_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON idempotency_keys TO m360_app;   -- DELETE: expire after 24 h

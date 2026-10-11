@@ -147,6 +147,7 @@ def get_version(domain: Domain, version: Version, request: Request,
             "approver": row["approver"], "is_live": live == version, "live_version": live,
             "created_at": _when(row["created_at"]), "approved_at": _when(row["approved_at"]),
             "published_at": _when(row["published_at"]), "yaml": row["yaml"],
+            "pack": jsonable(yaml.safe_load(row["yaml"])),          # the same rules as data, for a UI
             "lint_report": row["lint_report"], "verify_report": row["verify_report"],
             "diff_from_live": publisher.diff(live_row["yaml"], row["yaml"], f"v{live} (live)", f"v{version}")
             if live_row else ""}

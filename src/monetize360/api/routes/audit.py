@@ -1,4 +1,4 @@
-"""GET /v1/audit/{price_id}, POST /v1/audit/verify, GET /v1/audit/export, POST /v1/replay."""
+"""GET /v1/audit, GET /v1/audit/{price_id}, POST /v1/audit/verify, GET /v1/audit/export, POST /v1/replay."""
 from __future__ import annotations
 
 import csv
@@ -67,6 +67,16 @@ def _public(record: dict[str, Any], pack: dict | None) -> dict[str, Any]:
         "output": record["output"],
         "prev_hash": bytes(record["prev_hash"]).hex(), "hash": bytes(record["hash"]).hex(),
     }
+
+
+@router.get("/audit")
+def list_recent(request: Request, domain: Annotated[str, Query(min_length=1, max_length=40)],
+                limit: Annotated[int, Query(ge=1, le=500)] = 50,
+                principal: Principal = Depends(admin_key)) -> dict[str, Any]:   # noqa: B008
+    """The newest prices of one domain, newest first. Same columns as the export."""
+    _own_domain(principal, domain)
+    records = audit.recent(_db(request), principal.tenant_id, domain, limit)
+    return {"domain": domain, "rows": list(audit.iter_export(records))}
 
 
 @router.get("/audit/export")

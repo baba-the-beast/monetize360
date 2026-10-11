@@ -1,0 +1,79 @@
+{
+  "measured_on": "2026-10-11",
+  "machine": "one Windows 11 laptop, 12 logical CPUs; API, PostgreSQL 16 and the load generator all on it",
+  "caveat": "Laptop numbers with large run-to-run variance (see load_test.variance). They show the shape of the scaling and where the ceilings are, not production capacity.",
+  "commit": "m3-pricing-api, working tree after cea8aa1",
+  "tests": {
+    "unit_golden_property": {"passed": 543, "failed": 0},
+    "integration_real_postgres_and_redis": {"passed": 144, "failed": 0},
+    "golden_cases": {"passed": 16, "of": 16, "domains": 10}
+  },
+  "domain_agnostic": {
+    "domains_with_a_live_tested_pack": 10,
+    "engine_lines_changed_since_origin_main": 0,
+    "check": "python scripts/check_engine_frozen.py"
+  },
+  "safety": {
+    "fuzz_cases": 100000,
+    "packs": 10,
+    "violations": 0,
+    "seconds": 37.7,
+    "lint_clean_packs": "10 of 10"
+  },
+  "latency_light_load": {
+    "what": "/v1/price with a real audit row, 4 clients, 4 workers, 5 audit chains",
+    "req_per_s": 481,
+    "p50_ms": 8,
+    "p95_ms": 11,
+    "p99_ms": 14,
+    "failures": 0
+  },
+  "load_test": {
+    "tool": "Locust 2.46, closed loop, 32 clients, 20 s per run, every request a new entity",
+    "real_prices_5_audit_chains": {
+      "note": "median of the runs listed; req/s",
+      "workers_1": {"median": 197, "runs": [262, 206, 188, 172]},
+      "workers_2": {"median": 454, "runs": [454]},
+      "workers_4": {"median": 486, "runs": [667, 213, 391, 486, 604]},
+      "workers_8": {"median": 710, "runs": [834, 553, 707, 714]}
+    },
+    "real_prices_1_audit_chain": {
+      "note": "every price appends to the same (tenant, domain) chain: one writer at a time",
+      "workers_1": 252,
+      "workers_4": 396,
+      "workers_8": 416
+    },
+    "simulate_no_writes": {
+      "note": "engine + API only; at 8 workers the single-process load generator is probably the limit",
+      "workers_1": 596,
+      "workers_4": 1952,
+      "workers_8": 2399
+    },
+    "failures": 0,
+    "variance": "identical 4-worker runs ranged from 213 to 667 req/s; treat single numbers as rough"
+  },
+  "resilience": {
+    "what": "Postgres made to refuse every connection to the app database while the server was running",
+    "prices_requested": 40,
+    "prices_returned": 40,
+    "first_request_ms": 2013,
+    "then_p50_ms": 7.2,
+    "records_spooled": 40,
+    "records_recovered_into_the_chain": 40,
+    "seconds_to_recover_after_postgres_returned": 7,
+    "chain_valid_after": true,
+    "unseen_api_key_during_outage": "503 auth_unavailable"
+  },
+  "integrity": {
+    "what": "audit rows edited, removed or inserted by the database owner",
+    "kinds_of_tampering_tested": 9,
+    "detected": 9,
+    "not_detected_by_design": "deleting the newest rows of a chain"
+  },
+  "propagation": {
+    "key_revoked_seen_by_another_server_ms": 5,
+    "pack_published_seen_by_another_server_s": 0.03,
+    "kill_switch_set_ms": 222,
+    "without_redis_s": "up to 10 (pack and control poll) / 60 (key cache)"
+  }
+}

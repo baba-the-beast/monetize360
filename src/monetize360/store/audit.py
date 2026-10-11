@@ -143,6 +143,13 @@ def rows(db: Database, tenant_id: str, domain: str, *, start: datetime | None = 
             "ORDER BY seq LIMIT %s", (domain, start, start, end, end, limit)).fetchall()
 
 
+def recent(db: Database, tenant_id: str, domain: str, limit: int) -> list[dict[str, Any]]:
+    """The newest `limit` records of one chain, newest first."""
+    with db.tenant(tenant_id) as conn:
+        return conn.execute(f"SELECT {_COLUMNS} FROM audit_log WHERE domain = %s "   # noqa: S608
+                            "ORDER BY seq DESC LIMIT %s", (domain, limit)).fetchall()
+
+
 def recent_requests(db: Database, tenant_id: str, domain: str, limit: int) -> list[dict[str, Any]]:
     """The newest `limit` priced requests, as control/impact.py reads them (to re-price with a draft pack)."""
     with db.tenant(tenant_id) as conn:

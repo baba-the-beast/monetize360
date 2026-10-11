@@ -266,3 +266,39 @@ def test_swagger_prefilled_examples_work_as_is(client):
     assert [r["price"] for r in batch] == ["4950.00", "3300.00"]
     for path in ("/v1/price/{domain}", "/v1/price/{domain}/batch", "/v1/simulate/{domain}"):
         assert spec["paths"][path]["post"]["parameters"][0]["schema"]["example"] == "hotel"
+
+
+def test_scoreboard_counts_capabilities_from_the_schema_and_only_this_replicas_work(client):
+    before = client.get("/v1/scoreboard").json()["live"]["prices"]["ok"]
+    client.post("/v1/price/hotel", json=HOTEL)
+    client.post("/v1/price/hotel", json={**HOTEL, "signals": {"occupancy": 7}})
+    r = client.get("/v1/scoreboard")
+    board = r.json()
+    assert r.status_code == 200 and set(board) == {"capabilities", "live", "measured"}
+
+    caps = board["capabilities"]
+    assert caps["operator_count"] == len(caps["operators"]) >= 11
+    assert {"pct", "lookup_table", "piecewise_curve", "formula", "cost_plus"} <= set(caps["operators"])
+    assert caps["stacking_policies"] == ["multiply", "add", "max", "min", "first_match", "exclusive"]
+    assert caps["guard_layers"] == ["pack", "tenant", "platform"]
+
+    live = board["live"]
+    assert live["prices"]["ok"] == before + 1 and live["prices"]["rejected"] >= 1
+    assert live["live_packs"] == 10 and live["self_test"] is True
+    assert (live["database"], live["redis"]) == ("not_configured", "not_configured")
+    assert live["engine_ms_at_most"]["p95"] is not None
+    assert "demo" not in r.text and "deluxe" not in r.text          # no tenant, no entity
+
+
+def test_scoreboard_measured_block_is_absent_until_a_results_file_exists(client, tmp_path, monkeypatch):
+    from monetize360 import config
+    from monetize360.api.routes import scoreboard
+
+    missing = config.settings().__class__(**{**config.settings().__dict__, "measured_path": tmp_path / "none.json"})
+    monkeypatch.setattr(scoreboard, "settings", lambda: missing)
+    assert client.get("/v1/scoreboard").json()["measured"] is None                  # "not measured", not zeros
+
+    (tmp_path / "m.json").write_text('{"load_test": {"req_per_s": 123}}', encoding="utf-8")
+    found = config.settings().__class__(**{**config.settings().__dict__, "measured_path": tmp_path / "m.json"})
+    monkeypatch.setattr(scoreboard, "settings", lambda: found)
+    assert client.get("/v1/scoreboard").json()["measured"] == {"load_test": {"req_per_s": 123}}

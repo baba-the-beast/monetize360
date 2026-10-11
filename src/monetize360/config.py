@@ -20,6 +20,7 @@ class Settings:
     pack_schema_path: Path
     packs_dir: Path
     audit_spool_dir: Path
+    measured_path: Path
     dev_tenant: str | None
 
 
@@ -37,6 +38,8 @@ def settings() -> Settings:
         packs_dir=Path(env.get("PACKS_DIR", REPO_ROOT / "packs/templates")),
         # where audit records wait when Postgres is unreachable (one file per process)
         audit_spool_dir=Path(env.get("AUDIT_SPOOL_DIR", REPO_ROOT / ".audit-spool")),
+        # results of test and load runs, shown by /v1/scoreboard under "measured" (bench/RESULTS.md)
+        measured_path=Path(env.get("MEASURED_PATH", REPO_ROOT / "bench/measured.json")),
         # Until API keys exist (M4) the API is CLOSED unless a dev tenant is named here: every caller is then that
         # tenant and its packs come from PACKS_DIR. Never set in production.
         dev_tenant=env.get("DEV_TENANT") or None,

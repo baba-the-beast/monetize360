@@ -116,7 +116,7 @@ key: `owner` and `approver` are key ids, and they must differ. A stored version'
 |---|---|
 | `GET /v1/packs` | → `{ domains: [{ domain, live_version, latest_version, versions }] }` |
 | `GET /v1/packs/{domain}` | → `{ domain, live_version, versions: [{ version, status, owner, approver, lint_ok, verify_ok, created_at, approved_at, published_at }] }` — status: `draft`, `approved`, `published` (live), `archived` (was live) |
-| `GET /v1/packs/{domain}/{version}` | → `{ domain, version, status, owner, approver, is_live, live_version, yaml, lint_report, verify_report, diff_from_live, created_at, approved_at, published_at }` — `diff_from_live` is a unified diff of the YAML |
+| `GET /v1/packs/{domain}/{version}` | → `{ domain, version, status, owner, approver, is_live, live_version, yaml, pack, lint_report, verify_report, diff_from_live, created_at, approved_at, published_at }` — `pack` is the same YAML parsed to JSON; `diff_from_live` is a unified diff of the YAML |
 | `PUT /v1/packs/{domain}` | YAML text (`Content-Type: application/yaml`, max 256 KB) → `201 { domain, version, status: "draft", owner }`. Must pass the schema **and** compile, or nothing is stored: `422 pack_invalid` lists every problem with its path. YAML anchors/aliases are refused |
 | `POST /v1/packs/{domain}/{version}/lint` | → `{ ok, errors: [{code, path, message}], warnings: [...] }` — any error blocks approval. Uses the tenant's limits and banned signals. Codes: `schema`, `compile`, `fairness`, `personal_data`, `banned_signal`, `tenant_limit`, `exclusive_overlap`; warnings `fairness_proxy`, `unreachable`, `shadowed`, `expired`, `missing_default`, `max_base_price`, `band_gap`, `lookup_gap`, `unused_signal` |
 | `POST /v1/packs/{domain}/{version}/verify` | `{ "cases": 10000 }` (100–20,000) → `{ ok, cases, violations: [...first 10 {kind, message, input}], violation_counts, rejected_inputs, smallest: {kind, message, input} \| null, badge: "verified_safe" \| null, properties, base_price_range, seconds }` — about 2.5 s for 10,000 cases; deterministic per pack |
@@ -138,6 +138,7 @@ included — so a change can be tried before anyone approves it.
 
 | Method & path | Response |
 |---|---|
+| `GET /v1/audit?domain=hotel&limit=50` | `{ domain, rows: [{ seq, price_id, as_of, entity, pack_version, price, currency, base_price, signals, key_id, hash }] }` — newest first, up to 500 |
 | `GET /v1/audit/{price_id}` | full record: `price_id, domain, seq, entity, key_id, as_of, recorded_at, pack_version, pack_owner, pack_approver, inputs, signals_used, reference_price, output {price, currency, waterfall, bounds, flags}, prev_hash, hash` |
 | `POST /v1/audit/verify` `{ "domain": "hotel" }` | `{ ok: true, rows_checked, head_hash }` or `{ ok: false, rows_checked, first_broken_seq, price_id, reason }` — reason says whether the row was changed, removed or inserted |
 | `GET /v1/audit/export?domain=hotel&format=csv\|json&from=&to=` | up to 10,000 rows per call (`X-Truncated` header); CSV cells that start with `= + - @` are prefixed with `'` so a spreadsheet can't run them |
@@ -154,6 +155,13 @@ included — so a change can be tried before anyone approves it.
 | `PUT /v1/admin/policy` | `{ min_price?, max_price?, max_surge_x?, banned_signals? }` — **replaces** the policy (a field left out is cleared) → the policy as above + `broadcast`. Applies to every price in every domain at once, on top of each pack's guards (strictest wins); clamps show in the waterfall as `tenant_min` / `tenant_max` / `tenant_surge`. `409 policy_conflict` if it contradicts a live pack (e.g. a maximum below a pack's ceiling, or banning a signal a live pack uses); nothing is saved |
 | `POST /v1/admin/kill` | `{ domain, mode: "normal" \| "freeze" \| "base_only" }` → `{ domain, mode, previous_mode, broadcast }`. `freeze`: every entity gets its last issued price again (waterfall has one `frozen` row; `503 killed` with `Retry-After` if it never had a price). `base_only`: rules off, base price + guards + rounding still apply. Responses carry a `kill switch: ...` flag and the audit row records the mode |
 
+## Console
+
+| Path | Meaning |
+|---|---|
+| `GET /admin/` | the admin console: static files, no session. It keeps the API key you paste in the browser tab and calls this API with it |
+| `GET /v1/me` | any role → `{ tenant_id, key_id, role, domains }` — whose key this is |
+
 ## Ops (no auth)
 
 | Path | Meaning |
@@ -161,4 +169,4 @@ included — so a change can be tried before anyone approves it.
 | `GET /healthz` | process alive |
 | `GET /readyz` | packs loaded + Redis reachable + self-test price correct → 200, else 503 |
 | `GET /metrics` | Prometheus |
-| `GET /v1/scoreboard` | measured KPIs |
+| `GET /v1/scoreboard` | `{ capabilities, live, measured }` — `capabilities` counted from the pack schema; `live` = this replica's own counters since it started (prices, rejections, audit records in database / spooled, idempotent replays, kill-switch prices, engine latency upper bounds); `measured` = the contents of `bench/measured.json`, or `null` if nothing was measured. No tenant, domain name or price |

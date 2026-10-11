@@ -136,6 +136,16 @@ curl -X POST localhost:8000/v1/admin/kill   -H "Authorization: Bearer <admin key
 back. Every server obeys: at once through Redis, within 10 s without it, and a server started later already
 knows.
 
+### Load test, scoreboard and the engine-frozen check
+
+```sh
+locust -f bench/locustfile.py --headless -u 32 -r 32 -t 20s --host http://127.0.0.1:8010 --csv bench/results/run
+curl localhost:8000/v1/scoreboard          # capabilities, this replica's live counters, measured results
+python scripts/check_engine_frozen.py      # engine diff since origin/main; "no changes" = frozen
+```
+
+Measured numbers and what they mean: [bench/RESULTS.md](bench/RESULTS.md).
+
 ## Golden rule
 
 Humans write `tests/golden/*.yaml` by hand first. Code (AI-assisted or not) is done when

@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from monetize360.api import errors
 from monetize360.api.routes import admin as admin_routes
 from monetize360.api.routes import audit as audit_routes
-from monetize360.api.routes import health, price
+from monetize360.api.routes import console, health, price, scoreboard
 from monetize360.api.routes import packs as pack_routes
 from monetize360.config import settings
 from monetize360.security.keys import KeyVerifier
@@ -123,6 +123,7 @@ def _base_app(title: str, dev_tenant: str | None, packs_dir: Path | None, databa
 
     errors.install(app)
     app.include_router(health.router)
+    app.include_router(scoreboard.router)
     return app
 
 
@@ -139,12 +140,14 @@ def create_pricing_app(*, dev_tenant: str | None = None, packs_dir: Path | None 
 def create_control_app(*, dev_tenant: str | None = None, packs_dir: Path | None = None,
                        database_url: str | None = None, audit_spool_dir: Path | None = None,
                        redis_url: str | None = None, pack_poll_seconds: float | None = None) -> FastAPI:
-    """Control plane: packs (draft -> lint -> verify -> approve -> publish -> rollback), audit, replay, API keys."""
+    """Control plane: packs (draft -> lint -> verify -> approve -> publish -> rollback), audit, replay, API keys,
+    and the admin console at /admin."""
     app = _base_app("Monetize360 control API", dev_tenant, packs_dir, database_url, audit_spool_dir, redis_url,
                     pack_poll_seconds)
     app.include_router(pack_routes.router)
     app.include_router(audit_routes.router)
     app.include_router(admin_routes.router)
+    console.install(app)
     return app
 
 
@@ -158,4 +161,5 @@ def create_app(*, dev_tenant: str | None = None, packs_dir: Path | None = None,
     app.include_router(pack_routes.router)
     app.include_router(audit_routes.router)
     app.include_router(admin_routes.router)
+    console.install(app)
     return app

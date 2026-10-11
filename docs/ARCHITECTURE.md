@@ -586,7 +586,7 @@ Scale down to **2 replicas** (high availability, no cold start). Audit worker �
 | Audit write volume | very high sustained load | Monthly partitions (built in) → Kafka + ClickHouse |
 | Python CPU per request | if measured p95 misses target | Rewrite only `engine/evaluate` in Rust/Go — packs, API and tests unchanged |
 
-**All performance numbers are measured with Locust and published as measured — never claimed in advance.**
+**All performance numbers are measured with Locust and published as measured — never claimed in advance.** Measured results: section 19 and `bench/RESULTS.md`. In short: audited prices scale with workers across audit chains (~200 → ~710 req/s from 1 to 8 workers on one laptop), a single chain stops near 400 req/s, and the audit write — not the engine — is what costs.
 
 ---
 
@@ -816,14 +816,22 @@ React UI (mentor: backend judged) · AI/LLM copilot (determinism, no paid/extern
 
 ---
 
-## 19. Scoreboard (fill with measured values)
+## 19. Scoreboard (measured 2026-10-11)
+
+Served live by `GET /v1/scoreboard`; full detail and how to reproduce in `bench/RESULTS.md`.
+One Windows laptop (12 logical CPUs) ran the API, PostgreSQL and the load generator, and run-to-run variance was
+large — these show the shape of the system, not production capacity.
 
 | KPI | Metric | Target | Measured |
 |---|---|---|---|
-| Domain-agnostic | domains live / engine lines changed for new domain | 3+ / 0 | |
-| Flexibility | operators / stacking policies / guard layers | 11 / 5 / 3 | |
-| Correctness | golden pass rate · replay identical · waterfall self-check failures | 100% · 100% · 0 | |
-| Safety | fuzz cases · violations · seeded bad rules caught by linter | 10,000 · 0 · 100% | |
-| Performance | p95 engine / API · req/s per replica | < 50 ms / < 150 ms · measure | |
-| Resilience | pricing success with Postgres down | 100% | |
-| Integrity | tampered audit rows detected | 100% | |
+| Domain-agnostic | domains with a live tested pack / engine lines changed since `origin/main` | 3+ / 0 | **10 / 0** |
+| Flexibility | operators / stacking policies / guard layers | 11 / 5 / 3 | **12 / 6 / 3** |
+| Correctness | golden cases · replay identical · tests | 100% · 100% | **16 of 16** · identical for every domain tested · 543 + 144 tests pass |
+| Safety | fuzz cases · violations · lint-clean packs | 10,000 · 0 | **100,000 · 0** · 10 of 10 |
+| Performance, light load | `/price` with audit row, p50 / p95 / p99 | p95 < 150 ms | **8 / 11 / 14 ms** at 481 req/s |
+| Performance, saturation | audited prices per second, 1 / 4 / 8 workers | 1,000+ per node | **~200 / ~490 / ~710** (medians) — target **not met** on this laptop |
+| | one audit chain, any worker count | — | ~400 req/s: the documented one-writer ceiling |
+| | `/simulate` (no writes), 8 workers | — | ~2,400 req/s |
+| Resilience | prices returned with Postgres unreachable | 100% | **40 of 40**; all 40 records recovered into the chain 7 s after it returned |
+| Integrity | kinds of audit tampering detected | 100% | **9 of 9** (not by design: deleting the newest rows) |
+| Propagation | revoked key / published pack reaching another server | < 1 s | ~5 ms / 0.03 s with Redis; up to 60 s / 10 s without |

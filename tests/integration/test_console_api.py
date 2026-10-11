@@ -60,3 +60,30 @@ def test_console_files_are_served_with_a_strict_policy_and_hold_no_secret(client
     for path in ("/admin/app.css", "/admin/icons.svg", "/admin/js/core.js", "/admin/fonts/inter.woff2"):
         assert client.get(path).status_code == 200, path
     assert client.get("/admin/../../config.py").status_code == 404
+
+
+def test_domains_lists_only_what_the_key_may_price_and_only_what_to_send(client, auth):
+    def names(tenant, label):
+        r = client.get("/v1/domains", headers=auth(tenant, label))
+        assert r.status_code == 200
+        return {d["domain"] for d in r.json()["domains"]}
+
+    assert names("travel_003", "pricing_hotel_only") == {"hotel"}
+    assert {"hotel", "parking", "ride"} <= names("travel_003", "pricing_all")
+    assert "airline" not in names("travel_003", "pricing_all")          # another tenant's domain
+
+    hotel = next(d for d in client.get("/v1/domains", headers=auth("hotel_001", "pricing")).json()["domains"]
+                 if d["domain"] == "hotel")
+    assert set(hotel) == {"domain", "currency", "pack_version", "needs_base_price", "signals"}   # no rules, no limits
+    assert hotel["needs_base_price"] is True
+    assert [s["name"] for s in hotel["signals"]] == ["occupancy"]        # calendar signals are not the caller's job
+    assert hotel["signals"][0]["default"] == "0.5" and hotel["signals"][0]["required"] is False
+    assert client.get("/v1/domains").status_code == 401
+
+
+def test_portal_page_is_served_with_the_same_strict_policy(client):
+    page = client.get("/portal")
+    assert page.status_code == 200 and "/admin/js/portal.js" in page.text
+    assert "default-src 'self'" in page.headers["content-security-policy"]
+    assert "<style" not in page.text and "style=" not in page.text
+    assert client.get("/admin/js/portal.js").status_code == 200

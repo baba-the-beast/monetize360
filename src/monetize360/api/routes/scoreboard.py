@@ -60,6 +60,23 @@ def _quantile_upper_bound(buckets: dict[tuple, float], kind: str, q: float) -> f
     return next((le * 1000 for le, n in mine if n >= q * total), None)
 
 
+def _http(c: dict[str, dict[tuple, float]]) -> list[dict[str, Any]]:
+    """Per route: how many calls this replica answered and how long they took inside the server."""
+    counts, sums, buckets = (c.get(f"m360_http_seconds_{part}", {}) for part in ("count", "sum", "bucket"))
+    out = []
+    for labels, n in counts.items():
+        if not n:
+            continue
+        mine = sorted((float(dict(b)["le"]), v) for b, v in buckets.items()
+                      if tuple(x for x in b if x[0] != "le") == labels and dict(b)["le"] != "+Inf")
+
+        def at_most(q: float, mine=mine, n=n) -> float | None:
+            return next((le * 1000 for le, seen in mine if seen >= q * n), None)
+        out.append({**dict(labels), "calls": int(n), "mean_ms": round(sums.get(labels, 0) / n * 1000, 2),
+                    "p50_ms_at_most": at_most(0.50), "p95_ms_at_most": at_most(0.95)})
+    return sorted(out, key=lambda r: -r["calls"])
+
+
 def _measured() -> dict[str, Any] | None:
     path = settings().measured_path
     try:
@@ -99,6 +116,8 @@ def scoreboard(request: Request) -> dict[str, Any]:
                                   "p50": _quantile_upper_bound(buckets, "price", 0.50),
                                   "p95": _quantile_upper_bound(buckets, "price", 0.95),
                                   "p99": _quantile_upper_bound(buckets, "price", 0.99)},
+            # whole request inside this server (auth, database, engine, audit), by route template
+            "http": _http(c),
         },
         "measured": _measured(),
     }

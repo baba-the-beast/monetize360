@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
@@ -14,6 +15,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from prometheus_client import Histogram
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from monetize360.engine import EngineError
@@ -89,13 +91,25 @@ def _respond(request: Request, status: int, body: dict[str, Any],
                         headers={**(headers or {}), "X-Request-Id": rid})
 
 
+# How long each call took inside this server, by route template (so /v1/price/{domain}, never a tenant's domain
+# name). Read by GET /v1/scoreboard and /metrics; the same number goes back to the caller as Server-Timing.
+HTTP_SECONDS = Histogram("m360_http_seconds", "Time to answer one request, by route", ["method", "route"],
+                         buckets=(0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 10))
+
+
 def install(app: FastAPI) -> None:
     @app.middleware("http")
     async def with_request_id(request: Request, call_next):
         # keep the proxy's id when it is a plain token; never echo arbitrary header text back
         incoming = request.headers.get("x-request-id", "")
         request.state.request_id = incoming if _REQUEST_ID.fullmatch(incoming) else uuid.uuid4().hex
+        started = time.perf_counter()
         response = await call_next(request)
+        took = time.perf_counter() - started
+        route = getattr(request.scope.get("route"), "path", "")
+        if route.startswith("/v1"):
+            HTTP_SECONDS.labels(request.method, route).observe(took)
+        response.headers["Server-Timing"] = f"app;dur={took * 1000:.1f}"
         response.headers["X-Request-Id"] = request.state.request_id
         return response
 

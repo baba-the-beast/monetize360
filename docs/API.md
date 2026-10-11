@@ -11,6 +11,7 @@ Base URL (demo): `http://localhost:8080` · Interactive docs: `/docs` · All bod
 | Time | ISO-8601 UTC: `2026-10-11T09:00:00Z` |
 | IDs | `price_id` is a ULID (sortable by time) |
 | Request ID | Every response has header `X-Request-Id` |
+| Timing | Every response has header `Server-Timing: app;dur=<ms>`: how long this server spent on it (auth, database, engine, audit). `GET /v1/scoreboard` adds them up per route under `live.http` |
 | Tenant | **Never in the body.** Always taken from the key |
 
 ### Error format (every error)
@@ -160,7 +161,9 @@ included — so a change can be tried before anyone approves it.
 | Path | Meaning |
 |---|---|
 | `GET /admin/` | the admin console: static files, no session. It keeps the API key you paste in the browser tab and calls this API with it |
+| `GET /portal` | the developer portal: who your key is, what it can price, a live request builder with copy-paste code |
 | `GET /v1/me` | any role → `{ tenant_id, key_id, role, domains }` — whose key this is |
+| `GET /v1/domains` | any role → `{ domains: [{ domain, currency, pack_version, needs_base_price, signals: [{ name, type, required, default, range, values }] }] }` — the live domains this key may price and the inputs each takes (request signals only; no rules or limits) |
 
 ## Ops (no auth)
 

@@ -1,7 +1,7 @@
 // Overview, Limits, API keys and Price history.
 import {
   api, session, h, icon, replace, badge, note, empty, errorBox, run, toast, dialog, confirm, copy,
-  money, when, whenFull, count, duration, modeBadge,
+  money, when, whenFull, count, duration, modeBadge, took, tookText,
 } from './core.js';
 import { waterfall } from './packs.js';
 
@@ -92,7 +92,7 @@ export async function limits() {
         const saved = await api('PUT', '/v1/admin/policy', body);
         replace(result, note('ok', 'circle-check', 'Saved. Every price in every domain now obeys these limits.'));
         replace(changed, `Last changed ${whenFull(saved.updated_at)} by key ${saved.updated_by}.`);
-        toast('Limits saved');
+        toast(`Limits saved · ${tookText(saved)}`);
       } catch (err) {
         replace(result, errorBox(err, err.code === 'policy_conflict' ? 'These limits clash with rules that are live' : 'Not saved'));
       }
@@ -184,8 +184,8 @@ export async function keys() {
       text: own ? 'This is the key you are signed in with. Revoking it signs you out, and it can never be used again.'
         : 'Anything using this key is refused at once, on every server. This cannot be undone.' });
     if (yes) await run(button, async () => {
-      await api('POST', `/v1/admin/keys/${enc(k.key_id)}/revoke`);
-      toast('Key revoked');
+      const gone = await api('POST', `/v1/admin/keys/${enc(k.key_id)}/revoke`);
+      toast(`Key revoked · ${tookText(gone)}`);
       reload();
     });
   };
@@ -222,7 +222,7 @@ function record(priceId, currency) {
       replace(replayResult, r.identical === null ? note('info', 'snowflake', h('span', null,
         h('strong', null, 'Nothing to recalculate. '), 'This price was given while the domain was frozen: '
           + 'the item’s previous price was repeated', r.frozen_from ? ` (record ${r.frozen_from}).` : '.'))
-        : r.identical ? note('ok', 'circle-check', `Recalculated from the record with rules v${r.replayed_pack_version}: the same price and the same steps.`)
+        : r.identical ? note('ok', 'circle-check', `Recalculated from the record with rules v${r.replayed_pack_version}: the same price and the same steps.`, took(r))
         : note('danger', 'circle-x', h('strong', null, 'The recalculated price is different'),
           h('ul.problems', null, r.diff.map((d) => h('li', null, h('code', null, `${d.field} `), `${JSON.stringify(d.original)} → ${JSON.stringify(d.replayed)}`)))));
     }) }, icon('rotate-ccw'), 'Recalculate');
@@ -264,7 +264,7 @@ export async function history(parts) {
   const verify = h('button.btn', { type: 'button', onclick: () => run(verify, async () => {
     const v = await api('POST', '/v1/audit/verify', { domain: name });
     replace(verdict, v.ok
-      ? note('ok', 'shield-check', h('span', null, h('strong', null, `All ${count(v.rows_checked)} records are intact. `), 'None was changed, removed or added after the fact.'))
+      ? note('ok', 'shield-check', h('span', null, h('strong', null, `All ${count(v.rows_checked)} records are intact. `), 'None was changed, removed or added after the fact.'), took(v))
       : note('danger', 'triangle-alert', h('strong', null, `The records were tampered with at record #${v.first_broken_seq}`), h('span', null, v.reason)));
   }) }, icon('shield-check'), 'Check records');
 

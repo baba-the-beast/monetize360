@@ -1,7 +1,7 @@
 // Domains and their rules: the list, one domain's versions, and one version's path to live.
 import {
   api, session, h, icon, replace, badge, note, empty, errorBox, run, toast, dialog, confirm, copy,
-  money, when, count, MODES, modeSwitch,
+  money, when, count, MODES, modeSwitch, took, tookText,
 } from './core.js';
 
 const enc = encodeURIComponent;
@@ -66,7 +66,7 @@ export function uploadDialog(text = '') {
       try {
         const made = await api('PUT', `/v1/packs/${enc(name)}`, undefined, { yaml: area.value });
         close(made);
-        toast(`Draft v${made.version} saved`);
+        toast(`Draft v${made.version} saved · ${tookText(made)}`);
         go(`#/domains/${enc(made.domain)}/${made.version}`);
       } catch (err) {
         replace(problem, errorBox(err, 'The rules were not saved'));
@@ -133,8 +133,8 @@ export async function domain(name) {
     const yes = await confirm({ title: `Go back to version ${v}?`, action: `Make v${v} live`, tone: 'warn', iconName: 'rotate-ccw',
       text: `Version ${v} becomes live again on every server. The current version is kept and can be made live again later.` });
     if (yes) await run(button, async () => {
-      await api('POST', `/v1/packs/${enc(name)}/rollback`, { to_version: v });
-      toast(`Version ${v} is live`);
+      const back = await api('POST', `/v1/packs/${enc(name)}/rollback`, { to_version: v });
+      toast(`Version ${v} is live · ${tookText(back)}`);
       reload();
     });
   };
@@ -251,7 +251,7 @@ export function waterfall(rows, currency) {
 
 export function priceView(p) {
   return [
-    h('div', null, h('div.small.muted', null, 'Price'), h('div.price-big', null, money(p.price, p.currency))),
+    h('div', null, h('div.small.muted', null, 'Price'), h('div.price-big', null, money(p.price, p.currency)), took(p)),
     p.bounds && h('p.small.muted', null, `Allowed range for this request: ${money(p.bounds.lower, p.currency)} to ${money(p.bounds.upper, p.currency)}`),
     (p.flags || []).length > 0 && note('warn', 'triangle-alert', h('ul.problems', null, p.flags.map((f) => h('li', null, f)))),
     waterfall(p.waterfall, p.currency),
@@ -405,7 +405,7 @@ export async function version(name, number) {
         const yes = await confirm({ title: `Make version ${data.version} live?`, action: 'Publish', tone: 'warn', iconName: 'radio-tower',
           text: `Every new ${name} price will use these rules, on every server, straight away. You can roll back in one click.` });
         if (yes) await run(publishBtn, async () => {
-          try { await api('POST', `${base}/publish`); toast(`Version ${data.version} is live`); reload(); }
+          try { const live = await api('POST', `${base}/publish`); toast(`Version ${data.version} is live · ${tookText(live)}`); reload(); }
           catch (err) { await dialog('Not published', () => ({ body: errorBox(err, 'Not published') })); }
         });
       } }, icon('send'), 'Publish');
@@ -413,13 +413,13 @@ export async function version(name, number) {
     replace(steps,
       step(1, state(data.lint_report), 'Check the rules',
         'Looks for mistakes, unfair rules, banned signals and anything that breaks your limits.', lintBtn,
-        data.lint_report && problems(data.lint_report)),
+        data.lint_report && [problems(data.lint_report), took(data.lint_report)]),
       step(2, state(data.verify_report), 'Safety test',
         'Prices 10,000 random requests and proves none of them breaks a floor, a ceiling or the arithmetic.', verifyBtn,
-        data.verify_report && safety(data.verify_report)),
+        data.verify_report && [safety(data.verify_report), took(data.verify_report)]),
       step(3, impact ? 'done' : '', 'Preview the impact (optional)',
         'Re-runs your most recent real prices with these rules and shows what would have changed.', impactBtn,
-        impact && impactView(impact)),
+        impact && [impactView(impact), took(impact)]),
       step(4, data.approver ? 'done' : '', 'Approval by a second person',
         data.approver ? `Approved by key ${data.approver} on ${when(data.approved_at)}.`
           : lintOk && verifyOk ? 'Both checks passed. Whoever wrote the rules cannot approve them, so a second person signs off.'

@@ -30,6 +30,10 @@ class PackCache:
     def get(self, tenant_id: str, domain: str) -> LivePack | None:
         return self._packs.get((tenant_id, domain))
 
+    def for_tenant(self, tenant_id: str) -> list[LivePack]:
+        """This tenant's live packs, by domain name."""
+        return [pack for (tenant, _), pack in sorted(self._packs.items()) if tenant == tenant_id]
+
     def __len__(self) -> int:
         return len(self._packs)
 

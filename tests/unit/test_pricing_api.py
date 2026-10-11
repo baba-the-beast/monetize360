@@ -266,6 +266,19 @@ def test_console_is_on_the_control_app_only_and_no_script_runs_inline():
     assert TestClient(create_pricing_app(dev_tenant="demo")).get("/admin/").status_code == 404
 
 
+def test_every_answer_says_how_long_the_server_took_and_the_scoreboard_adds_it_up_by_route(client):
+    r = client.post("/v1/simulate/hotel", json=HOTEL)
+    assert r.status_code == 200
+    name, _, value = r.headers["server-timing"].partition(";dur=")
+    assert name == "app" and 0 < float(value) < 5000
+    assert "server-timing" in client.get("/v1/price/nope").headers          # refusals are timed too
+
+    rows = client.get("/v1/scoreboard").json()["live"]["http"]
+    row = next(x for x in rows if x["route"] == "/v1/simulate/{domain}" and x["method"] == "POST")
+    assert row["calls"] >= 1 and row["mean_ms"] > 0 and row["p95_ms_at_most"] >= row["p50_ms_at_most"]
+    assert not any("hotel" in x["route"] for x in rows)                      # templates only, never a domain name
+
+
 def test_console_never_builds_html_from_text():
     """Everything the server sends is put on the page as text nodes. innerHTML would turn a pack's `reason`
     or a key's name into markup."""

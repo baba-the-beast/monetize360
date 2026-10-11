@@ -112,3 +112,21 @@ changed, and we can recalculate any old price from its record and get exactly th
 - No user accounts or passwords: identity is the API key.
 - Creating a new organisation (tenant) is done by `scripts/seed_demo.py`, not in the console.
 - The narrow-screen layout is written but was not tested on a phone.
+
+## Developer portal (`/portal`)
+
+The page for whoever connects an app to the engine. It uses the same frame, stylesheet and components as the
+admin console (`js/core.js`, `app.css`), so the two cannot drift apart. Any role may sign in. Prices asked for
+here are real: they go through `POST /v1/price` and are recorded.
+
+| Page | What it does | API calls |
+|---|---|---|
+| Sign in | paste any key of the organisation | `GET /v1/me` |
+| Get a price | pick a domain; the form lists exactly the inputs that domain takes; the answer shows the price, every step and the `price_id`; the same request is shown as curl, Python and JavaScript; a table lists the prices this tab was given | `GET /v1/domains`, `POST /v1/price/{domain}` (or `/v1/simulate/{domain}` when "Preview only" is ticked) |
+| API key | the key you are signed in with. An admin can create a `pricing` key here and switch the portal to it ("Use it here") | `POST /v1/admin/keys` (admin only) |
+| Reference | the calls, the response fields and what each refusal means | none |
+
+Demo (1 minute): open `/portal`, sign in with the admin key, **API key → Create key → Use it here** (the role
+at the bottom left turns to `pricing` and the admin link disappears). On **Get a price** set occupancy to `0.9`
+and press **Get price**: a real price with a `price_id`. Open the admin console's **Price history**: the same
+price is there. *"This is everything a customer's developer needs: a key, the inputs, and code to paste."*

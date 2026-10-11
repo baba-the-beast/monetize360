@@ -18,19 +18,27 @@ class Interval:
     flags: list[str] = field(default_factory=list)
 
 
-def _limit(limit: Limit, base: Decimal) -> Decimal:
-    return q(limit.value if limit.op == "abs" else base * limit.value / 100)
+def _limit(limit: Limit, base: Decimal, values: dict) -> Decimal:
+    if limit.op == "abs":
+        return q(limit.value)
+    if limit.op == "pct_of_base":
+        return q(base * limit.value / 100)
+    return q(Decimal(values[limit.signal]) * limit.pct / 100)        # op == signal, e.g. ceiling = MRP
 
 
 def _describe(name: str, limit: Limit, value: Decimal) -> str:
     if limit.op == "pct_of_base":
         return f"{name} {limit.value}% of base = {value}"
+    if limit.op == "signal":
+        if limit.pct == 100:
+            return f"{name} = {limit.signal} {value}"
+        return f"{name} {limit.pct}% of {limit.signal} = {value}"
     return f"{name} {value}"
 
 
 def interval(guards: Guards, base: Decimal, policy: Policy | None,
-             reference: Decimal | None) -> Interval:
-    floor, ceiling = _limit(guards.floor, base), _limit(guards.ceiling, base)
+             reference: Decimal | None, values: dict) -> Interval:
+    floor, ceiling = _limit(guards.floor, base, values), _limit(guards.ceiling, base, values)
     lower = [("platform_min", CENT, f"Platform minimum price {CENT}")]
     upper: list[tuple[str, Decimal, str]] = []
     if policy is not None:

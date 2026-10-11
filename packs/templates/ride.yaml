@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=../schema/pack.schema.json
+domain: ride
+currency: INR
+signals:
+  distance_km:
+    type: number
+    range: [0, 500]
+    source: request
+  duration_min:
+    type: number
+    range: [0, 600]
+    source: request
+  demand_ratio:
+    type: number
+    range: [0, 10]
+    source: request
+    default: 1
+  vehicle:
+    type: enum
+    values: [bike, auto, sedan, suv]
+    source: request
+  hour: {type: int, source: public}
+base:
+  op: lookup_table
+  signal: vehicle
+  table: {bike: 20, auto: 30, sedan: 50, suv: 80}
+groups:
+- name: trip
+  stacking: multiply
+  rules:
+  - id: distance-time
+    when: 'true'
+    then: {op: formula, expr: price + distance_km * 12 + duration_min * 1.5}
+    reason: '{distance_km} km, {duration_min} min'
+- name: surge
+  stacking: max
+  rules:
+  - id: demand
+    when: demand_ratio > 1
+    then:
+      op: piecewise_curve
+      signal: demand_ratio
+      points:
+      - [1, 1.0]
+      - [2, 1.5]
+      - [4, 2.5]
+    reason: Demand {demand_ratio}x supply
+  - id: night
+    when: hour >= 23 || hour < 5
+    then: {op: pct, value: 25}
+    reason: Night
+guards:
+  floor: {op: abs, value: 25}
+  ceiling: {op: abs, value: 5000}
+rounding: {step: 1, mode: half_up}

@@ -1,0 +1,13 @@
+# HAND-CALCULATED (review 2026-10-11). Never edit an expected value without recalculating by hand.
+# 8 x 1.4 = 11.20; x1.5 = 16.80; hour 18 x1.3 = 21.84; -10% = 19.66 (19.656); step 0.5 -> 19.50
+pack: packs/templates/ev_charging.yaml
+cases:
+- name: ev_charging reference case
+  inputs: {grid_price: '8.00', charger: dc_fast, member: true, hour: 18}
+  expect_price: '19.50'
+  expect_waterfall:
+  - {step: base, delta: '11.20', after: '11.20'}
+  - {step: speed, delta: '5.60', after: '16.80'}
+  - {step: time-of-day, delta: '5.04', after: '21.84'}
+  - {step: member, delta: '-2.18', after: '19.66'}
+  - {step: rounding, delta: '-0.16', after: '19.50'}

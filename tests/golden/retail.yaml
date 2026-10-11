@@ -1,0 +1,12 @@
+# HAND-CALCULATED (review 2026-10-11). Never edit an expected value without recalculating by hand.
+# 1000 x 1.3 = 1300; -15% = 1105; bulk -5% of 1105 = -55.25 -> 1049.75; floor 85% of 1300 = 1105
+pack: packs/templates/retail.yaml
+cases:
+- name: retail reference case
+  inputs: {cost: '1000', inventory: 600, qty: 12}
+  expect_price: '1105.00'
+  expect_waterfall:
+  - {step: base, delta: '1300.00', after: '1300.00'}
+  - {step: clearance, delta: '-195.00', after: '1105.00'}
+  - {step: bulk, delta: '-55.25', after: '1049.75'}
+  - {step: floor, delta: '55.25', after: '1105.00'}

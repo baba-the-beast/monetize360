@@ -80,6 +80,12 @@ means the installed package never needs to find `packs/` on disk.
 4. **The running price is the sum of quantized deltas** — `after = previous_after + delta`. This makes the
    waterfall add up by construction; the self-check (§8) catches bugs that break it.
 5. Factors (curves, lookups) are *not* quantized; only money deltas are.
+6. **Nothing below 0.01 is silently destroyed.** Money written in a pack (`set`, `abs`, every base price —
+   `set`, `band`, `lookup_table` values and default — and `abs` limits) must have at most 2 decimals and be
+   ≤ 10¹² → else `PackInvalid`. A base that quantizes to 0.00 or less (0.00102 per second; a competitor price
+   of 0) is an error from **every** base op, blamed on its source: `SignalInvalid` when the caller supplied it
+   (`base_price`, or the signal behind `cost_plus` / `competitor_rel`), `RuleError` when the pack produced it
+   (`formula`, table data). Message: "below the smallest unit 0.01 — price per 1,000 units instead". (A per-pack `precision` is a known limit, ARCHITECTURE §12.1.)
 
 ---
 
@@ -95,14 +101,24 @@ For each declared signal, in this order:
 
 Then validate: type, `range` (inclusive), `values`. Undeclared keys in `ctx.signals` → `SignalInvalid`.
 Numeric types (`ratio`, `number`, `money`) accept a number or a numeric string, converted with
-`Decimal(str(x))`; `int` accepts an integer (or integer string); `bool` accepts only `true`/`false`.
+`Decimal(str(x))`; `int` accepts an integer (or integer string); `bool` accepts only `true`/`false`;
+`text` accepts any string of 1–64 characters (route codes, SKUs, pin codes); `enum` must be one of `values`.
 Numeric and `int` signals, and `base_price`, must satisfy `|x| ≤ 10¹²` (`MAX_ABS`) → else `SignalInvalid`
 ("too large"). This keeps every amount far inside the 28-digit context, so quantizing never fails. Any
 arithmetic error that still happens (only a pathological pack can cause one) → `RuleError`,
 never a raw exception.
 
-Public signals: `is_weekend` (Sat/Sun), `weekday` (`mon`…`sun`), `hour` (0–23), `festival`
-(name from the built-in festival table, else `none`; must be one of the signal's `values`, else `none`).
+Public signals: `is_weekend` (Sat/Sun), `weekday` (`mon`…`sun`), `hour` (0–23), `minute` (0–59),
+`day` (1–31), `month` (1–12), all in the pack timezone — and **calendar signals**:
+
+- A pack may have a `calendar:` section: `calendar: {festival: {"2026-11-08": diwali, "2026-12-25": christmas}}`.
+  Each key names a `public` `enum` signal; on a listed local date its value is that entry, on any other day
+  `none`. The signal may have any name (`sale_day`, `school_holiday`, …) — a new festival, country or sale day
+  never needs an engine change, and the dates are versioned with the pack, so replay is exact.
+- `festival` with no `calendar:` section uses the engine's built-in table (Diwali and Holi 2025–2027).
+- Compile errors (`PackInvalid`): a calendar signal without `none` in its values; a value with **no date** in
+  its calendar ("festival can never be 'eid' — no date in the calendar"); a calendar entry that isn't one of
+  the signal's values; a calendar for a name that isn't a public enum signal.
 
 ---
 
@@ -118,8 +134,10 @@ One row: `Row(step="base", kind="base", delta=B, after=B, reason=…)`.
 | `lookup_table` | table value (§5 lookup rules) |
 | `cost_plus` | `cost × (1 + margin_pct/100)` |
 | `competitor_rel` | `competitor × (1 + pct/100)` |
+| `formula` | value of `expr` over the signals (no `price`/`base` yet), e.g. `50 + distance_km * 12`. Must be a number > 0, else `RuleError` |
 
-B is quantized to 0.01.
+B is quantized to 0.01 (see §2.6 for a B that rounds to 0.00). `pct_of_base` guards and the tenant surge cap
+measure against B — which is why a calculated fare should be a `formula` base, not a formula rule.
 
 ---
 
@@ -159,6 +177,7 @@ Multi-dimensional: key = list of the signal values in `signals` order.
 | `multiply` | Apply fired rules in order to the running price. factor: `delta = q(P × (f − 1))`; amount: `delta = q(v)`; new price: `delta = q(v − P)`. One row per fired rule |
 | `add` | Every delta computed against `G`: factor: `q(G × (f − 1))`; amount: `q(v)`. One row per fired rule. `set`/`formula` not allowed (linter) |
 | `max` | Compute each fired rule's delta alone against `G`; keep the **largest** (tie → first in order). One row. In a discount-only group (all deltas negative) this keeps the *smallest* discount |
+| `min` | Mirror of `max`: keep the **smallest** delta (tie → first in order). In a discount group this is "the customer gets the single best offer". One row |
 | `first_match` | Only the first fired rule in order, computed against `G`. One row |
 | `exclusive` | 0 fired → nothing; 1 fired → as `first_match`; >1 → `ExclusiveConflict` |
 
@@ -177,9 +196,15 @@ Points sorted by x. `x <= x0` → `f0`; `x >= xn` → `fn`; otherwise between ne
 ### 5.4 Expressions (`when` and `formula`)
 
 Packs write CEL syntax: `&&`, `||`, `!`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `in [..]`, `+ - * /`, parentheses,
-`true` / `false` / `null`, `'strings'`, numbers and declared signal names (`price` too, in a `formula`).
-Anything else — calls, attribute access, Python's `and`/`or`/`not` — is rejected at compile time
-(`PackInvalid`), as is an unknown signal name.
+`true` / `false` / `null`, `'strings'`, numbers, declared signal names, `price` and `base`, and exactly three
+functions: `min(a, b, …)`, `max(a, b, …)`, `abs(a)` (numbers in, number out). Anything else — any other
+call, attribute access, Python's `and`/`or`/`not` — is rejected at compile time (`PackInvalid`), as is an
+unknown name. `price`, `base`, `min`, `max`, `abs` can't be signal names.
+
+- **`price` and `base`:** in a `when`, `price` is the price **at the start of the rule's group** (so
+  conditions never depend on rule order inside a group) and `base` is B. In a rule `formula`, `price` is the
+  running price and `base` is B. A base `formula` sees signals only. Example — match a cheaper competitor but
+  never below cost + 5%: `when: "competitor < price"`, `expr: "max(competitor, cost * 1.05)"`.
 
 - **Exact:** number literals and signals are `Decimal`; `x >= 0.8` with `x = 0.80` is true.
 - **Type-checked at compile time** → `PackInvalid`, never a failure on a live request. Signal types map to
@@ -214,7 +239,9 @@ interval = soft ∩ hard   if that is non-empty
          = hard          otherwise   (hard limits always beat smoothness)
 ```
 
-`floor: pct_of_base` = `B × value/100`. All bounds quantized to 0.01.
+`floor: pct_of_base` = `B × value/100`. `{op: signal, signal: s, pct: p}` = `value of s × p/100` (`pct`
+default 100) — e.g. ceiling = the item's MRP, floor = 105% of cost; the signal must be numeric. All bounds
+quantized to 0.01.
 
 ### 6.2 `reference_price` (owned by the API layer, not the engine)
 

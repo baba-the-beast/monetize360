@@ -50,7 +50,21 @@
     },
 
     "guards": { "$ref": "#/$defs/guards" },
-    "rounding": { "$ref": "#/$defs/rounding" }
+    "rounding": { "$ref": "#/$defs/rounding" },
+
+    "calendar": {
+      "description": "Dates for public calendar signals, e.g. festival: {\"2026-11-08\": diwali}. Days not listed are 'none'. Quote the dates. Part of the pack, so it is versioned and replays exactly.",
+      "type": "object",
+      "maxProperties": 10,
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": {
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": 1000,
+        "propertyNames": { "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "additionalProperties": { "$ref": "#/$defs/enum_value" }
+      }
+    }
   },
 
   "$defs": {
@@ -58,6 +72,11 @@
       "description": "snake_case name, usable in CEL expressions.",
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]{0,39}$"
+    },
+    "enum_value": {
+      "description": "An enum value: route codes, SKUs, zones... e.g. DEL-BOM, A100X, 2BHK.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,39}$"
     },
     "rule_id": {
       "type": "string",
@@ -86,11 +105,11 @@
       "required": ["type", "source"],
       "properties": {
         "type": {
-          "description": "ratio = 0..1, money = amount in pack currency.",
-          "enum": ["ratio", "number", "money", "int", "bool", "enum"]
+          "description": "ratio = 0..1, money = amount in pack currency, text = any code up to 64 chars (route, SKU, pin code).",
+          "enum": ["ratio", "number", "money", "int", "bool", "enum", "text"]
         },
         "source": {
-          "description": "request = sent by caller; redis = pushed by a feed; public = derived from date (weekday, festival).",
+          "description": "request = sent by caller; redis = pushed by a feed; public = derived from the date (is_weekend, weekday, hour, minute, day, month, festival, or a calendar: signal).",
           "enum": ["request", "redis", "public"]
         },
         "description": { "type": "string", "maxLength": 200 },
@@ -106,9 +125,9 @@
           "description": "Allowed values for type: enum.",
           "type": "array",
           "minItems": 2,
-          "maxItems": 100,
+          "maxItems": 1000,
           "uniqueItems": true,
-          "items": { "$ref": "#/$defs/identifier" }
+          "items": { "$ref": "#/$defs/enum_value" }
         },
         "max_staleness": { "$ref": "#/$defs/duration" },
         "on_stale": {
@@ -128,7 +147,7 @@
           "else": { "not": { "anyOf": [{ "required": ["max_staleness"] }, { "required": ["on_stale"] }] } }
         },
         {
-          "if": { "properties": { "type": { "enum": ["bool", "enum"] } } },
+          "if": { "properties": { "type": { "enum": ["bool", "enum", "text"] } } },
           "then": { "not": { "required": ["range"] } }
         }
       ]
@@ -139,7 +158,7 @@
       "type": "object",
       "required": ["op"],
       "properties": {
-        "op": { "enum": ["from_request", "set", "band", "lookup_table", "cost_plus", "competitor_rel"] }
+        "op": { "enum": ["from_request", "set", "band", "lookup_table", "cost_plus", "competitor_rel", "formula"] }
       },
       "allOf": [
         {
@@ -196,6 +215,15 @@
               "cost_signal": { "$ref": "#/$defs/identifier" },
               "margin_pct": { "type": "number", "minimum": -100, "maximum": 1000 }
             }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "formula" } } },
+          "then": {
+            "description": "Calculated base, e.g. \"50 + distance_km * 12\". Signals only (no price yet); must give a number > 0.",
+            "additionalProperties": false,
+            "required": ["expr"],
+            "properties": { "op": true, "expr": { "$ref": "#/$defs/cel" } }
           }
         },
         {
@@ -263,8 +291,8 @@
       "properties": {
         "name": { "$ref": "#/$defs/identifier" },
         "stacking": {
-          "description": "multiply = compound; add = sum percentages; max = biggest wins; first_match = first firing rule only; exclusive = at most one may fire (linter + runtime error otherwise).",
-          "enum": ["multiply", "add", "max", "first_match", "exclusive"]
+          "description": "multiply = compound; add = sum percentages; max = biggest change wins; min = smallest change wins (best discount); first_match = first firing rule only; exclusive = at most one may fire (runtime error otherwise).",
+          "enum": ["multiply", "add", "max", "min", "first_match", "exclusive"]
         },
         "rules": {
           "type": "array",
@@ -435,11 +463,16 @@
     "limit": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["op", "value"],
+      "required": ["op"],
       "properties": {
-        "op": { "description": "abs = fixed amount; pct_of_base = % of the base price.", "enum": ["abs", "pct_of_base"] },
-        "value": { "$ref": "#/$defs/positive" }
-      }
+        "op": { "description": "abs = fixed amount; pct_of_base = % of the base price; signal = a numeric signal's value (e.g. MRP, cost), optionally x pct/100.", "enum": ["abs", "pct_of_base", "signal"] },
+        "value": { "$ref": "#/$defs/positive" },
+        "signal": { "$ref": "#/$defs/identifier" },
+        "pct": { "description": "op signal only: e.g. 105 = 105% of the signal. Default 100.", "type": "number", "exclusiveMinimum": 0, "maximum": 1000 }
+      },
+      "if": { "properties": { "op": { "const": "signal" } } },
+      "then": { "required": ["signal"], "not": { "required": ["value"] } },
+      "else": { "required": ["value"], "not": { "anyOf": [{ "required": ["signal"] }, { "required": ["pct"] }] } }
     },
 
     "guards": {

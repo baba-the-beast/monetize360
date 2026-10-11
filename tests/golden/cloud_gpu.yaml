@@ -1,0 +1,10 @@
+# HAND-CALCULATED (review 2026-10-11). Never edit an expected value without recalculating by hand.
+# 3.67; curve(0.9) = 1.4 -> +1.47 (1.468) = 5.14
+pack: packs/templates/cloud_gpu.yaml
+cases:
+- name: cloud_gpu reference case
+  inputs: {utilization: '0.9', gpu: a100}
+  expect_price: '5.14'
+  expect_waterfall:
+  - {step: base, delta: '3.67', after: '3.67'}
+  - {step: scarcity, delta: '1.47', after: '5.14'}

@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=../schema/pack.schema.json
+domain: event_tickets
+currency: INR
+signals:
+  capacity_sold: {type: ratio, source: request}
+  days_to_event:
+    type: int
+    range: [0, 365]
+    source: request
+  section:
+    type: enum
+    values: [general, premium, vip]
+    source: request
+base:
+  op: lookup_table
+  signal: section
+  table: {general: 800, premium: 2000, vip: 5000}
+groups:
+- name: demand
+  stacking: max
+  rules:
+  - id: sell-through
+    when: 'true'
+    then:
+      op: band
+      signal: capacity_sold
+      bands:
+      - {upto: 0.5, factor: 1.0}
+      - {upto: 0.8, factor: 1.2}
+      - {upto: 1.0, factor: 1.5}
+    reason: '{capacity_sold} sold'
+  - id: last-minute
+    when: days_to_event <= 2
+    then: {op: pct, value: 30}
+    reason: Last minute
+- name: early
+  stacking: exclusive
+  rules:
+  - id: early-bird
+    when: days_to_event > 60
+    then: {op: pct, value: -20}
+    reason: Early bird
+guards:
+  floor: {op: pct_of_base, value: 70}
+  ceiling: {op: pct_of_base, value: 200}
+rounding: {step: 50, mode: half_up}

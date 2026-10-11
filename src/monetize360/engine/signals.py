@@ -47,6 +47,10 @@ def coerce(spec: SignalSpec, raw: Any) -> Any:
         if not isinstance(raw, bool):
             raise bad("must be true or false")
         v = raw
+    elif t == "text":
+        if not isinstance(raw, str) or not 1 <= len(raw) <= 64:
+            raise bad("must be text of 1 to 64 characters")
+        v = raw
     else:  # enum
         if not isinstance(raw, str) or raw not in spec.values:
             raise bad(f"must be one of {', '.join(spec.values)}")
@@ -112,7 +116,7 @@ def resolve(pack: CompiledPack, ctx: Context) -> tuple[dict[str, Any], dict[str,
         else:  # public
             if local is None:
                 local = ctx.as_of.astimezone(pack.timezone)
-            values[name] = compute(name, local, spec.values)
+            values[name] = compute(name, local, spec.calendar)
             used[name] = {"value": values[name], "source": "public"}
 
     return values, used, flags

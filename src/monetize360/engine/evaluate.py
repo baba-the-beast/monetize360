@@ -30,6 +30,9 @@ def _evaluate(pack: CompiledPack, ctx: Context, policy: Policy | None, disabled_
 
         raw_base, why = base_price(pack.base, ctx, values)
         base = q(raw_base)
+        if base <= 0:
+            raise _base_error(pack, raw_base)
+        values = {**values, "base": base}               # rules and formulas may use `base` (review D4)
         rows = [Row("base", "base", base, base, why)]
         price = base
 
@@ -37,7 +40,7 @@ def _evaluate(pack: CompiledPack, ctx: Context, policy: Policy | None, disabled_
             group_rows, price = apply_group(group, price, values, ctx.as_of, disabled_rules)
             rows += group_rows
 
-        iv = interval(pack.guards, base, policy, ctx.reference_price)
+        iv = interval(pack.guards, base, policy, ctx.reference_price, values)
         flags += iv.flags
         clamped = clamp(price, iv)
         if clamped is not None:
@@ -58,6 +61,19 @@ def _evaluate(pack: CompiledPack, ctx: Context, policy: Policy | None, disabled_
                         bounds={"lower": iv.lower, "upper": iv.upper}, flags=tuple(flags))
         self_check(result)
         return result
+
+
+def _base_error(pack: CompiledPack, raw_base) -> Exception:
+    """Never let a base of 0.00 (e.g. 0.00102 per second, or a competitor price of 0) reach the floor clamp and come
+    back as a confident wrong price (review D2). Blame whoever supplied it."""
+    why = ("is below the smallest unit 0.01 — price per 1,000 units instead" if raw_base > 0
+           else "must be greater than 0")
+    op = pack.base.op
+    if op == "from_request":
+        return SignalInvalid(f"base price {raw_base} {why}", [{"path": "base_price", "value": str(raw_base)}])
+    if op in ("cost_plus", "competitor_rel"):                      # computed from a caller's signal
+        return SignalInvalid(f"base price from {op} ({raw_base}) {why}", [{"path": f"signals.{pack.base.signal}"}])
+    return RuleError(f"base price from {op} ({raw_base}) {why}", [{"path": "base"}])   # pack data or formula
 
 
 def self_check(result: Result) -> None:

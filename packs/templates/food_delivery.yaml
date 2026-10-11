@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=../schema/pack.schema.json
+domain: food_delivery
+currency: INR
+signals:
+  distance_km:
+    type: number
+    range: [0, 30]
+    source: request
+  rain: {type: bool, source: request, default: false}
+  rider_supply: {type: ratio, source: request, default: 0.5}
+base:
+  op: band
+  signal: distance_km
+  bands:
+  - {upto: 2, price: 20}
+  - {upto: 5, price: 35}
+  - {upto: 30, price: 60}
+groups:
+- name: conditions
+  stacking: add
+  rules:
+  - id: rain
+    when: rain
+    then: {op: pct, value: 30}
+    reason: Rain
+  - id: few-riders
+    when: rider_supply < 0.3
+    then: {op: pct, value: 40}
+    reason: Few riders nearby
+guards:
+  floor: {op: abs, value: 15}
+  ceiling: {op: abs, value: 150}
+rounding: {step: 1, mode: half_up}

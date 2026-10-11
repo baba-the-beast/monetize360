@@ -1,0 +1,12 @@
+# HAND-CALCULATED (review 2026-10-11). Never edit an expected value without recalculating by hand.
+# 50 + (120 + 45) = 215; curve(2) = 1.5 -> +107.50 = 322.50; round -> 323
+pack: packs/templates/ride.yaml
+cases:
+- name: ride reference case
+  inputs: {distance_km: 10, duration_min: 30, demand_ratio: 2, vehicle: sedan, hour: 14}
+  expect_price: '323.00'
+  expect_waterfall:
+  - {step: base, delta: '50.00', after: '50.00'}
+  - {step: distance-time, delta: '165.00', after: '215.00'}
+  - {step: demand, delta: '107.50', after: '322.50'}
+  - {step: rounding, delta: '0.50', after: '323.00'}

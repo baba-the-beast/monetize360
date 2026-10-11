@@ -105,9 +105,9 @@ Same response **without** `price_id`; nothing is audited, `reference_price` may 
 | `GET /v1/packs/{domain}` | → `{ live_version, versions: [{version, status, owner, approver, created_at}] }` |
 | `GET /v1/packs/{domain}/{version}` | → `{ version, status, yaml, lint_report, verify_report }` |
 | `PUT /v1/packs/{domain}` | YAML text (`Content-Type: application/yaml`) → `201 { version, status: "draft" }` or 422 `pack_invalid` with every schema error |
-| `POST /v1/packs/{domain}/{version}/lint` | → `{ ok, errors: [...], warnings: [...] }` |
-| `POST /v1/packs/{domain}/{version}/verify` | `{ "cases": 10000 }` → `{ ok, cases, violations: [...first 10], badge: "verified_safe" }` |
-| `POST /v1/packs/{domain}/{version}/impact` | `{ "last_n": 1000 }` → `{ compared, up_pct, down_pct, unchanged_pct, change_p10, change_p50, change_p90, new_floor_hits, new_ceiling_hits }` |
+| `POST /v1/packs/{domain}/{version}/lint` | → `{ ok, errors: [{code, path, message}], warnings: [...] }` — any error blocks publish. Codes: `schema`, `compile`, `fairness`, `personal_data`, `banned_signal`, `tenant_limit`, `exclusive_overlap`; warnings `fairness_proxy`, `unreachable`, `shadowed`, `expired`, `missing_default`, `max_base_price`, `band_gap`, `lookup_gap`, `unused_signal` |
+| `POST /v1/packs/{domain}/{version}/verify` | `{ "cases": 10000 }` → `{ ok, cases, violations: [...first 10 {kind, message, input}], violation_counts, rejected_inputs, smallest: {kind, message, input} \| null, badge: "verified_safe" \| null, properties, base_price_range, seconds }` — about 4 s for 10,000 cases; deterministic per pack |
+| `POST /v1/packs/{domain}/{version}/impact` | `{ "last_n": 1000 }` → `{ compared, up_pct, down_pct, unchanged_pct, change_p10, change_p50, change_p90, new_floor_hits, new_ceiling_hits, would_fail, failures, replay_mismatches, biggest_movers }` |
 | `POST /v1/packs/{domain}/{version}/approve` | role `approver`, must differ from author → `{ status: "approved" }` |
 | `POST /v1/packs/{domain}/{version}/publish` | role `approver`; requires lint ok + verify ok + approved → `{ live_version }` |
 | `POST /v1/packs/{domain}/rollback` | role `approver`, `{ "to_version": 2 }` → `{ live_version }` |

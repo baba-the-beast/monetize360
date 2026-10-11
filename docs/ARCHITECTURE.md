@@ -455,7 +455,9 @@ Target: 15+ golden cases per domain during the event (covering each operator, ea
 
 Use case: "something looks wrong at 2 AM" → one call, every replica obeys in under a second, investigate calmly.
 
-**Linter checks:** schema · unknown/misspelled signals (via CEL type-check) · floor > ceiling · ceiling above tenant max · banned signals · rules that can never fire · two rules in an `exclusive` group that can both fire · missing defaults · expired effective dates · more than 500 rules in the pack · `ending` not reachable with `step` (need `100 % step == 0` and `ending % step == 0`).
+**Linter checks** (`control/linter.py`; errors block publish): schema · compile (unknown or misspelled signals, type errors, floor > ceiling, `ending` unreachable with `step`, more than 500 rules) · **fairness**: a protected attribute (gender, religion, caste, race, ethnicity, disability, age, …) or personal data (email, phone, customer_id, …) can't be a signal at all · tenant-banned signals · pack limits outside tenant limits · a rule that always fires in an `exclusive` group. Warnings: proxy attributes (pincode, postcode), rules that never fire or are shadowed, expired rules, missing defaults, the highest base price the pack can price, band and lookup gaps, unused signals.
+
+**Fuzz verifier** (`control/verifier.py`): 10,000 random but valid requests generated from the pack's own specs, in about 4 s. Hypothesis runs the first 1,000 (it hunts edge values) and a seeded sweep the rest; the same pack always gets the same cases. Each price is checked **independently of the engine's self-check**: every valid input gets a price, floor ≤ price ≤ ceiling (pack and tenant), `max_change`, the waterfall adds up, same input → same output. A violation is shrunk to the smallest input that still fails (e.g. two overlapping exclusive rules → `inventory = 501`). All 10 templates are Verified Safe. Demo: `python scripts/demo.py safety`.
 
 ---
 
@@ -555,6 +557,18 @@ We don't claim legal compliance (that's the customer's lawyers' call). We provid
 | Pack rule fails at runtime | ✅ no wrong price | e.g. formula ÷ 0 → `500 rule_error` naming the rule; fix the pack or roll back |
 | Request outside what the pack can price | ✅ no wrong price | e.g. base too high for floor/ceiling → `422 bounds_conflict` |
 | Whole service unreachable | client-side | Client uses last price until `valid_until`, then its own fallback |
+
+### 12.1 Known limits (stated, not hidden)
+
+Things a real industry may need that a pack **can't express yet** — each is an additive change, none needs a
+redesign:
+
+| Limit | Today | Planned fix |
+|---|---|---|
+| Prices below 0.01 (per-second cloud, per-token, KWD's 3 decimals) | Refused with a clear error, never rounded to 0.00 | Pack field `precision: 0..6` driving rounding and the self-check |
+| Free items (`price: 0`, 100% promo) | Floor is at least 0.01 | `guards.allow_free: true` |
+| Operator input from an expression (`piecewise_curve` on `demand / supply`) | Caller sends the ratio as a signal | `input: "<expr>"` instead of `signal:` |
+| CEL ternary `c ? a : b` | Use `min`/`max` or two rules | Rewrite to a conditional before parsing, same-type branches |
 
 ---
 

@@ -1,0 +1,12 @@
+# HAND-CALCULATED (review 2026-10-11). Never edit an expected value without recalculating by hand.
+# 1499; -10% = 1349.10; -15% = -202.37 -> 1146.73; round -> 1147
+pack: packs/templates/saas.yaml
+cases:
+- name: saas reference case
+  inputs: {seats: 25, plan: pro, region: india, annual: true}
+  expect_price: '1147.00'
+  expect_waterfall:
+  - {step: base, delta: '1499.00', after: '1499.00'}
+  - {step: seat-tier, delta: '-149.90', after: '1349.10'}
+  - {step: annual, delta: '-202.37', after: '1146.73'}
+  - {step: rounding, delta: '0.27', after: '1147.00'}

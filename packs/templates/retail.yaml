@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=../schema/pack.schema.json
+domain: retail
+currency: INR
+signals:
+  cost:
+    type: money
+    range: [0.01, 1000000]
+    source: request
+  inventory:
+    type: int
+    range: [0, 100000]
+    source: request
+  qty:
+    type: int
+    range: [1, 1000]
+    source: request
+    default: 1
+base: {op: cost_plus, cost_signal: cost, margin_pct: 30}
+groups:
+- name: stock
+  stacking: exclusive
+  rules:
+  - id: clearance
+    when: inventory > 500
+    then: {op: pct, value: -15}
+    reason: Overstock clearance
+  - id: scarce
+    when: inventory < 20
+    then: {op: pct, value: 10}
+    reason: Low stock
+- name: volume
+  stacking: add
+  rules:
+  - id: bulk
+    when: qty >= 10
+    then:
+      op: tier
+      signal: qty
+      tiers:
+      - {from: 10, pct: -5}
+      - {from: 50, pct: -10}
+    reason: Bulk order of {qty}
+guards:
+  floor: {op: pct_of_base, value: 85}
+  ceiling: {op: pct_of_base, value: 150}
+rounding: {step: 1, mode: half_up}

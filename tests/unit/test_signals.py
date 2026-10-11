@@ -165,6 +165,6 @@ def test_huge_numeric_signal_is_invalid_input():
 
 def test_largest_allowed_base_price_works(hotel):
     p = compile_pack({**load_pack("hotel.yaml"),
-                      "guards": {"floor": {"op": "abs", "value": 1}, "ceiling": {"op": "abs", "value": 2e12}}})
+                      "guards": {"floor": {"op": "abs", "value": 1}, "ceiling": {"op": "abs", "value": 10**12}}})
     assert evaluate(p, ctx("1000000000000", occupancy="0.5", is_weekend=False, festival="none")).price \
         == Decimal("1000000000000.00")

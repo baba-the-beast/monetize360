@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=../schema/pack.schema.json
+domain: cloud_gpu
+currency: USD
+signals:
+  utilization: {type: ratio, source: request}
+  gpu:
+    type: enum
+    values: [t4, a10, a100]
+    source: request
+  spot: {type: bool, source: request, default: false}
+base:
+  op: lookup_table
+  signal: gpu
+  table: {t4: 0.35, a10: 1.1, a100: 3.67}
+groups:
+- name: market
+  stacking: multiply
+  rules:
+  - id: scarcity
+    when: 'true'
+    then:
+      op: piecewise_curve
+      signal: utilization
+      points:
+      - [0.5, 0.8]
+      - [0.8, 1.0]
+      - [0.95, 1.6]
+    reason: Fleet {utilization} used
+  - id: spot
+    when: spot
+    then: {op: pct, value: -60}
+    reason: Spot instance
+guards:
+  floor: {op: abs, value: 0.05}
+  ceiling: {op: abs, value: 20}
+rounding: {step: 0.01, mode: half_up}

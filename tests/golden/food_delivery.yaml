@@ -1,0 +1,12 @@
+# HAND-CALCULATED (review 2026-10-11). Never edit an expected value without recalculating by hand.
+# band(4) = 35; +30% = 10.50, +40% = 14 -> 59.50; round -> 60
+pack: packs/templates/food_delivery.yaml
+cases:
+- name: food_delivery reference case
+  inputs: {distance_km: 4, rain: true, rider_supply: '0.2'}
+  expect_price: '60.00'
+  expect_waterfall:
+  - {step: base, delta: '35.00', after: '35.00'}
+  - {step: rain, delta: '10.50', after: '45.50'}
+  - {step: few-riders, delta: '14.00', after: '59.50'}
+  - {step: rounding, delta: '0.50', after: '60.00'}

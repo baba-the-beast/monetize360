@@ -1,0 +1,10 @@
+# HAND-CALCULATED (review 2026-10-11). Never edit an expected value without recalculating by hand.
+# 2000; max(+50% = 1000, +30% = 600) = 3000
+pack: packs/templates/event_tickets.yaml
+cases:
+- name: event_tickets reference case
+  inputs: {capacity_sold: '0.85', days_to_event: 1, section: premium}
+  expect_price: '3000.00'
+  expect_waterfall:
+  - {step: base, delta: '2000.00', after: '2000.00'}
+  - {step: sell-through, delta: '1000.00', after: '3000.00'}

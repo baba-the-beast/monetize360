@@ -1,0 +1,11 @@
+# HAND-CALCULATED (review 2026-10-11). Never edit an expected value without recalculating by hand.
+# band(2.5) = 80; car x1.0; +20% = 96; step 10 -> 100
+pack: packs/templates/parking.yaml
+cases:
+- name: parking reference case
+  inputs: {hours: 2.5, occupancy: '0.95', vehicle: car, is_weekend: false}
+  expect_price: '100.00'
+  expect_waterfall:
+  - {step: base, delta: '80.00', after: '80.00'}
+  - {step: busy, delta: '16.00', after: '96.00'}
+  - {step: rounding, delta: '4.00', after: '100.00'}

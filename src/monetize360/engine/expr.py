@@ -1,9 +1,11 @@
 """Rule expressions: the CEL subset packs use — && || ! == != < <= > >= in + - * / ( ) [ ], true false null,
-'strings', numbers and signal names — TYPE-CHECKED and compiled once, evaluated with exact Decimal math.
+'strings', numbers, signal names, `price`, `base`, and the ONLY three calls allowed: min(), max(), abs() —
+TYPE-CHECKED and compiled once, evaluated with exact Decimal math.
 
 Why not cel-python (ENGINE_SPEC §5.4): it evaluates numbers as floats (`price * 1.1` = 3300.0000000000005),
 rejects `int > double` comparisons, and measured ~300 µs per condition. This evaluator walks Python's own
-`ast` parse tree through a whitelist — no eval/exec, no attribute access, no calls, no loops — and checks
+`ast` parse tree through a whitelist — no eval/exec, no attribute access, no calls except min/max/abs by bare
+name (no keywords, no *args), no loops — and checks
 types at compile time, so `festival > 3` or `festival == 'diwaly'` is a PackInvalid at publish, never a
 failure on a live request.
 """
@@ -176,6 +178,28 @@ class _Builder:
         self.names.add(node.id)
         key = node.id
         return (lambda env: env[key]), self.types[key]
+
+    # The ONLY calls allowed: three pure number functions, by bare name. No keywords, no *args, no other names.
+    _FUNCTIONS = {"min": (2, None), "max": (2, None), "abs": (1, 1)}
+
+    def _Call(self, node: ast.Call) -> tuple[Fn, str]:
+        name = node.func.id if isinstance(node.func, ast.Name) else None
+        if name not in self._FUNCTIONS or node.keywords or any(isinstance(a, ast.Starred) for a in node.args):
+            raise ExprError(f"'{ast.unparse(node)}' is not allowed in a rule expression "
+                            "(the only functions are min, max and abs)")
+        lo, hi = self._FUNCTIONS[name]
+        if len(node.args) < lo or (hi is not None and len(node.args) > hi):
+            raise ExprError(f"{name}() takes {lo if hi == lo else f'at least {lo}'} argument(s)")
+        args = []
+        for a in node.args:
+            f, t = self.build(a)
+            self._need(a, t, NUM, f"{name}()")
+            args.append(f)
+        if name == "abs":
+            only = args[0]
+            return (lambda env: abs(_num(only(env)))), NUM
+        pick = min if name == "min" else max
+        return (lambda env: pick(_num(f(env)) for f in args)), NUM
 
     def _List(self, node: ast.List | ast.Tuple) -> tuple[Fn, str]:
         built = [self.build(e) for e in node.elts]

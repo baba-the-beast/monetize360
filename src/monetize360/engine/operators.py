@@ -6,7 +6,16 @@ from decimal import Decimal
 from typing import Any
 
 from .expr import ExprError
-from .models import MAX_ABS, Adjustment, Context, InvariantViolation, LookupMiss, SignalInvalid, SignalMissing
+from .models import (
+    MAX_ABS,
+    Adjustment,
+    Context,
+    InvariantViolation,
+    LookupMiss,
+    RuleError,
+    SignalInvalid,
+    SignalMissing,
+)
 from .signals import show
 
 
@@ -121,4 +130,16 @@ def base_price(adj: Adjustment, ctx: Context, values: dict) -> tuple[Decimal, st
     if op == "competitor_rel":
         comp = Decimal(values[adj.signal])
         return comp * (1 + adj.value / 100), f"Competitor price {show(comp)} {adj.value:+}%"
+    if op == "formula":
+        try:
+            b = adj.expr(values)
+        except ExprError as e:
+            raise RuleError(f"base: {e}", [{"path": "base.expr"}]) from None
+        if isinstance(b, bool) or not isinstance(b, (Decimal, int)) or b <= 0:
+            raise RuleError(f"base formula '{adj.expr.source}' gave {b!r}; a base price must be greater than 0",
+                            [{"path": "base.expr"}])
+        if b > MAX_ABS:
+            raise RuleError(f"base formula '{adj.expr.source}' gave {b}, above the limit {MAX_ABS}",
+                            [{"path": "base.expr"}])
+        return Decimal(b), f"Base price: {adj.expr.source}"
     raise InvariantViolation(f"unknown base operator {op}")

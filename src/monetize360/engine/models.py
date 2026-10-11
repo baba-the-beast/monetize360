@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import decimal
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, tzinfo
+from datetime import date, datetime, timedelta, tzinfo
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable
 
@@ -122,6 +122,7 @@ class SignalSpec:
     default: Any = None
     max_staleness: timedelta | None = None
     on_stale: str = "use_default"
+    calendar: dict[date, str] | None = None     # public calendar signals: local date -> value, else "none"
 
 
 @dataclass(frozen=True)
@@ -160,8 +161,10 @@ class Group:
 
 @dataclass(frozen=True)
 class Limit:
-    op: str                                     # abs | pct_of_base
-    value: Decimal
+    op: str                                     # abs | pct_of_base | signal
+    value: Decimal | None = None                # abs amount, or pct for pct_of_base
+    signal: str | None = None                   # op == signal: the limit is this signal's value ...
+    pct: Decimal = Decimal(100)                 # ... times pct/100 (e.g. floor = 105% of cost)
 
 
 @dataclass(frozen=True)

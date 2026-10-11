@@ -69,7 +69,7 @@ api ──► control ──► engine ◄── workers
 | Purpose | Tool | Why |
 |---|---|---|
 | Tests | **pytest** | Standard, simple |
-| Fuzz / property tests | **Hypothesis** | Generates thousands of random contexts; powers `/verify` *and* our test suite |
+| Fuzz / property tests | **Hypothesis** (a runtime dependency, not only dev) | Powers `/verify` in `control-api` *and* our test suite; shrinks a failure to its smallest input |
 | API tests | **httpx** (FastAPI TestClient) | Call the app in-process, no server needed |
 | Load test | **Locust** | Python, measures req/s and p50/p95/p99 |
 | Lint + security lint | **Ruff** (incl. `S` = bandit rules) | One fast tool: style, imports, security smells like `eval`, hard-coded passwords |
@@ -158,7 +158,7 @@ monetize360/
 │
 ├── packs/
 │   ├── schema/                   pack.schema.json (validation + editor autocomplete)
-│   └── templates/                hotel.yaml (done) · airline · ride · retail · parking · ev_charging
+│   └── templates/                10 domains, each with golden cases: hotel · airline · ride · retail · parking · ev_charging · event_tickets · saas · cloud_gpu · food_delivery
 │
 ├── tests/
 │   ├── golden/                   ★ HAND-CALCULATED cases (hotel.yaml seeded) + runner
@@ -189,6 +189,7 @@ monetize360/
     ├── BUILD_GUIDE.md            team split, milestones, tester checklist
     ├── PROMPTS.md                ready-made AI prompts per person
     ├── REVIEW-engine-2026-10-11.md  engine review of main @ e5867a0 (findings #1–#12)
+    ├── REVIEW-domain-agnostic.md     "works for any domain?" review of main @ cd93fdb (8 domains, gaps D1–D9)
     └── TECH_STACK.md             this file
 ```
 

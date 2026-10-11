@@ -1,4 +1,4 @@
-"""Stacking policies per group: multiply, add, max, first_match, exclusive (ENGINE_SPEC §5, §5.2)."""
+"""Stacking policies per group: multiply, add, max, min, first_match, exclusive (ENGINE_SPEC §5, §5.2)."""
 from __future__ import annotations
 
 import re
@@ -53,8 +53,10 @@ def reason(rule: Rule, values: dict) -> str:
 
 def apply_group(group: Group, price: Decimal, values: dict, as_of: datetime,
                 disabled: frozenset[str]) -> tuple[list[Row], Decimal]:
-    """Apply one group to the running price. Returns its waterfall rows and the new running price."""
-    fired = [r for r in group.rules if r.id not in disabled and fires(r, values, as_of)]
+    """Apply one group to the running price. Returns its waterfall rows and the new running price.
+    In `when`, `price` is the price at the START of the group, so conditions don't depend on rule order."""
+    when_env = {**values, "price": price}
+    fired = [r for r in group.rules if r.id not in disabled and fires(r, when_env, as_of)]
     if not fired:
         return [], price
     if group.stacking == "exclusive" and len(fired) > 1:
@@ -76,11 +78,11 @@ def apply_group(group: Group, price: Decimal, values: dict, as_of: datetime,
     elif group.stacking == "add":
         for r in fired:
             emit(r, rule_delta(r, start, values))
-    elif group.stacking == "max":
+    elif group.stacking in ("max", "min"):
         best = None
         for r in fired:
             d = rule_delta(r, start, values)
-            if best is None or d > best[1]:
+            if best is None or (d > best[1] if group.stacking == "max" else d < best[1]):
                 best = (r, d)
         emit(*best)
     else:  # first_match, or exclusive with exactly one fired rule

@@ -37,8 +37,16 @@ def run(src: str, **env):
     "x.real",
     # function / method calls of any kind
     "len(festival)",
-    "max(x, 1)",
     "int('5')",
+    "round(x)",
+    "sum([x, 1])",
+    "min",                  # a bare function name is not a value
+    "max(x, key=abs)",      # no keywords
+    "max(*[x, 1])",         # no *args
+    "min(x)",               # min/max need 2+ arguments
+    "abs(x, 1)",
+    "max(festival, 'a')",   # numbers only
+    "x.max(1)",
     "print(x)",
     # other Python constructs that are not CEL
     "lambda: 1",

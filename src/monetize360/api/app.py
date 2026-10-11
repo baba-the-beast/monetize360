@@ -28,6 +28,7 @@ from monetize360.security.ratelimit import RateLimiter
 from monetize360.store import api_keys, packs
 from monetize360.store.audit import AuditLog
 from monetize360.store.cache import Events
+from monetize360.store.controls import Controls
 from monetize360.store.db import Database
 from monetize360.store.packcache import PackCache
 
@@ -62,7 +63,9 @@ def _base_app(title: str, dev_tenant: str | None, packs_dir: Path | None, databa
     app.state.limiter = RateLimiter()
     app.state.db = app.state.keys = app.state.dev_tenant = app.state.audit = app.state.events = None
     app.state.stopping = threading.Event()
+    app.state.controls = Controls()        # limits + kill switches; empty without a database
     app.state.refresh_packs = lambda: 0
+    app.state.refresh_controls = lambda: None
 
     if database_url:
         if dev_tenant:
@@ -80,6 +83,10 @@ def _base_app(title: str, dev_tenant: str | None, packs_dir: Path | None, databa
             return cache.sync_rows(packs.live_packs(db))
         app.state.refresh_packs = refresh_packs
 
+        def refresh_controls() -> None:
+            app.state.controls.refresh(db)
+        app.state.refresh_controls = refresh_controls
+
         if redis_url:
             # broadcasts only (store/cache.py): a revoked key is dropped by every replica at once
             keys, events = app.state.keys, Events(redis_url, app.state.db.fingerprint)
@@ -89,8 +96,12 @@ def _base_app(title: str, dev_tenant: str | None, packs_dir: Path | None, databa
             # a publish or rollback somewhere: the message carries no pack, it only says "look again"
             events.on("pack_published", lambda m: refresh_packs())
             events.on_connect(refresh_packs)
+            # a tenant's limits or a kill switch changed somewhere: same rule, re-read Postgres
+            events.on("controls_changed", lambda m: refresh_controls())
+            events.on_connect(refresh_controls)
             events.start()
             app.state.events = events
+        refresh_controls()
         loaded = refresh_packs()
         log.info("API keys ON, %d live pack(s) loaded from the database", loaded)
 
@@ -99,6 +110,7 @@ def _base_app(title: str, dev_tenant: str | None, packs_dir: Path | None, databa
             while not app.state.stopping.wait(pack_poll_seconds or cfg.pack_poll_seconds):
                 try:
                     refresh_packs()
+                    refresh_controls()
                 except Exception:      # noqa: BLE001 - database down: keep serving what we have, try again
                     log.warning("pack poll failed; keeping the packs already loaded")
         threading.Thread(target=poll, name="pack-poll", daemon=True).start()

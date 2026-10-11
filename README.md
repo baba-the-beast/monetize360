@@ -121,6 +121,21 @@ A draft prices nothing, but `POST /v1/simulate/hotel` with `"pack_version": 2` t
 same steps on a new domain name: `PUT /v1/packs/ev_charging` ... publish, and `/v1/price/ev_charging` works with
 no restart and no engine change. Prices issued under an old version still replay under that version.
 
+### Tenant limits and the kill switch
+
+With an `admin` key:
+
+```sh
+curl -X PUT  localhost:8000/v1/admin/policy -H "Authorization: Bearer <admin key>" \
+     -H "Content-Type: application/json" -d '{"max_surge_x": "1.1"}'     # busy room 3600 -> 3300, at once
+curl -X POST localhost:8000/v1/admin/kill   -H "Authorization: Bearer <admin key>" \
+     -H "Content-Type: application/json" -d '{"domain": "hotel", "mode": "freeze"}'
+```
+
+`freeze` repeats each room's last price, `base_only` turns the rules off but keeps the guards, `normal` goes
+back. Every server obeys: at once through Redis, within 10 s without it, and a server started later already
+knows.
+
 ## Golden rule
 
 Humans write `tests/golden/*.yaml` by hand first. Code (AI-assisted or not) is done when

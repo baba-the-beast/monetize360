@@ -8,7 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Mapping
 
-from monetize360.engine import Context, EngineError, Result, compile_pack, evaluate
+from monetize360.engine import Context, EngineError, Policy, Result, compile_pack, evaluate
 
 
 def output_of(result: Result) -> dict[str, Any]:
@@ -21,6 +21,20 @@ def output_of(result: Result) -> dict[str, Any]:
         "bounds": {"lower": f"{result.bounds['lower']:.2f}", "upper": f"{result.bounds['upper']:.2f}"},
         "flags": list(result.flags),
     }
+
+
+def policy_json(policy: Policy | None) -> dict[str, str] | None:
+    """Tenant limits as they are stored in an audit record (money as text)."""
+    if policy is None:
+        return None
+    fields = {"min_price": policy.min_price, "max_price": policy.max_price, "max_surge_x": policy.max_surge_x}
+    return {k: str(v) for k, v in fields.items() if v is not None} or None
+
+
+def policy_of(record: Mapping[str, Any]) -> Policy | None:
+    """The tenant limits that applied when this price was issued."""
+    stored = record["inputs"].get("policy")
+    return Policy(**{k: Decimal(str(v)) for k, v in stored.items()}) if stored else None
 
 
 def context_of(record: Mapping[str, Any]) -> Context:
@@ -38,8 +52,16 @@ def context_of(record: Mapping[str, Any]) -> Context:
 def replay(record: Mapping[str, Any], pack: Mapping[str, Any]) -> dict[str, Any]:
     """Re-price `record` with `pack` (a schema-valid pack dict). Returns {original, replayed, identical, diff}."""
     original = dict(record["output"])
+    kill = record["inputs"].get("kill_mode")
+    if kill == "freeze":
+        # the engine did not run for this price: the entity's previous price was repeated
+        return {"original": original, "replayed": None, "identical": None, "diff": [],
+                "reason": "issued under kill switch 'freeze': the last price was repeated, nothing was calculated",
+                "frozen_from": record["inputs"].get("frozen_from")}
     try:
-        replayed: dict[str, Any] = output_of(evaluate(compile_pack(pack), context_of(record)))
+        compiled = compile_pack(pack)
+        rules_off = compiled.rule_ids if kill == "base_only" else frozenset()
+        replayed: dict[str, Any] = output_of(evaluate(compiled, context_of(record), policy_of(record), rules_off))
     except EngineError as e:
         replayed = {"error": {"code": e.code, "message": e.message}}
     return {"original": original, "replayed": replayed, "identical": replayed == original,

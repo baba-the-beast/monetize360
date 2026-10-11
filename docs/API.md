@@ -38,6 +38,7 @@ Base URL (demo): `http://localhost:8080` · Interactive docs: `/docs` · All bod
 | 500 | `rule_error` | a pack rule failed at runtime (e.g. formula divides by zero); names the rule — fix the pack |
 | 500 | `invariant_violation` | engine self-check failed — an engine bug; no price returned |
 | 503 | `auth_unavailable` | the key store can't be reached and this replica has never seen this key; `Retry-After: 5`. Keys already seen keep working |
+| 409 | `policy_conflict` | new tenant limits contradict a pack that is live; `details` lists each conflict |
 | 503 | `signal_stale`, `killed` | stale signal with `on_stale: reject`; domain in kill mode `freeze` without a stored price |
 
 ---
@@ -149,8 +150,9 @@ included — so a change can be tried before anyone approves it.
 | `POST /v1/admin/keys` | `{ role, domains, name?, rate_limit_rps?, expires_at?, env? }` → `201 { key_id, api_key, name, role, domains, rate_limit_rps, expires_at, note }` — **the key is shown once** (`Cache-Control: no-store`); only its SHA-256 is stored. A key can't create a key for domains outside its own scope (403) |
 | `GET /v1/admin/keys` | → `{ keys: [{ key_id, name, role, domains, rate_limit_rps, status: active \| expired \| revoked, created_at, created_by, expires_at, revoked_at, revoked_by }] }` — never the secret |
 | `POST /v1/admin/keys/{key_id}/revoke` | → `{ key_id, revoked_at, broadcast }`. Refused by this replica at once and by the others as soon as they hear the broadcast (`broadcast: false` = Redis unreachable: they find out within the 60 s key cache). `404 key_not_found` for a key that isn't yours; `409 last_admin_key` if it is your only working admin key |
-| `PUT /v1/admin/policy` | `{ min_price?, max_price?, max_surge_x?, banned_signals?, require_two_person? }` |
-| `POST /v1/admin/kill` | `{ domain, mode: "normal" \| "freeze" \| "base_only" }` |
+| `GET /v1/admin/policy` | → `{ min_price, max_price, max_surge_x, banned_signals, require_two_person, updated_by, updated_at, kill_switches: [{ domain, mode, set_by, set_at }] }` |
+| `PUT /v1/admin/policy` | `{ min_price?, max_price?, max_surge_x?, banned_signals? }` — **replaces** the policy (a field left out is cleared) → the policy as above + `broadcast`. Applies to every price in every domain at once, on top of each pack's guards (strictest wins); clamps show in the waterfall as `tenant_min` / `tenant_max` / `tenant_surge`. `409 policy_conflict` if it contradicts a live pack (e.g. a maximum below a pack's ceiling, or banning a signal a live pack uses); nothing is saved |
+| `POST /v1/admin/kill` | `{ domain, mode: "normal" \| "freeze" \| "base_only" }` → `{ domain, mode, previous_mode, broadcast }`. `freeze`: every entity gets its last issued price again (waterfall has one `frozen` row; `503 killed` with `Retry-After` if it never had a price). `base_only`: rules off, base price + guards + rounding still apply. Responses carry a `kill switch: ...` flag and the audit row records the mode |
 
 ## Ops (no auth)
 

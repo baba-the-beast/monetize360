@@ -13,9 +13,19 @@ CREATE TABLE tenant_policy (
     max_surge_x         numeric(6,2),
     banned_signals      text[] NOT NULL DEFAULT '{}',
     require_two_person  boolean NOT NULL DEFAULT true,
-    kill_mode           text NOT NULL DEFAULT 'normal'
-                        CHECK (kill_mode IN ('normal', 'freeze', 'base_only')),
+    updated_by          text,                             -- key_id of the admin key that last changed it
+    updated_at          timestamptz NOT NULL DEFAULT now(),
     CHECK (min_price IS NULL OR max_price IS NULL OR min_price <= max_price)
+);
+
+-- The kill switch, per domain: normal | freeze (repeat the last price) | base_only (rules off, guards on).
+CREATE TABLE kill_switch (
+    tenant_id  text NOT NULL REFERENCES tenants(id),
+    domain     text NOT NULL,
+    mode       text NOT NULL CHECK (mode IN ('normal', 'freeze', 'base_only')),
+    set_by     text,
+    set_at     timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, domain)
 );
 
 CREATE TABLE api_keys (
@@ -98,6 +108,7 @@ CREATE TABLE price_state (
     anchor_time   timestamptz NOT NULL,
     last_price    numeric(16,2) NOT NULL,                 -- the most recent price (also the kill switch's "freeze")
     last_time     timestamptz NOT NULL,
+    last_price_id text,                                   -- which audited price that was
     PRIMARY KEY (tenant_id, domain, entity)
 );
 
@@ -115,7 +126,7 @@ CREATE INDEX idempotency_age_idx ON idempotency_keys (tenant_id, created_at);
 
 -- ---------- permissions: app role can never rewrite history ----------
 GRANT SELECT ON tenants TO m360_app;                           -- tenants are created by the operator (owner role)
-GRANT SELECT, INSERT, UPDATE ON tenant_policy, pack_pointer TO m360_app;
+GRANT SELECT, INSERT, UPDATE ON tenant_policy, pack_pointer, kill_switch TO m360_app;
 GRANT SELECT, INSERT ON api_keys TO m360_app;
 GRANT UPDATE (revoked_at, revoked_by) ON api_keys TO m360_app;   -- create and revoke; never rewrite secret, role, scope
 GRANT SELECT, INSERT, UPDATE (status, approver, compiled, lint_report, verify_report, approved_at, published_at)
@@ -130,7 +141,7 @@ DO $$
 DECLARE t text;
 BEGIN
     FOREACH t IN ARRAY ARRAY['tenant_policy', 'api_keys', 'packs', 'pack_pointer', 'audit_log', 'price_state',
-                             'idempotency_keys'] LOOP
+                             'idempotency_keys', 'kill_switch'] LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format(
             'CREATE POLICY tenant_isolation ON %I USING (tenant_id = current_setting(''app.tenant_id'', true))',
@@ -165,3 +176,18 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
 $$;
 REVOKE ALL ON FUNCTION list_live_packs() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION list_live_packs() TO m360_app;
+
+-- Pricing replicas keep every tenant's limits and kill switches in memory (a price request never looks them up),
+-- so like live packs they are read for all tenants at startup and on each refresh. Service account only.
+CREATE FUNCTION list_tenant_limits()
+RETURNS TABLE (tenant_id text, min_price numeric, max_price numeric, max_surge_x numeric)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+    SELECT tenant_id, min_price, max_price, max_surge_x FROM tenant_policy
+$$;
+CREATE FUNCTION list_kill_switches()
+RETURNS TABLE (tenant_id text, domain text, mode text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+    SELECT tenant_id, domain, mode FROM kill_switch WHERE mode <> 'normal'
+$$;
+REVOKE ALL ON FUNCTION list_tenant_limits(), list_kill_switches() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION list_tenant_limits(), list_kill_switches() TO m360_app;

@@ -52,8 +52,10 @@ def test_ops_endpoints_need_no_key_and_reveal_no_tenant(client):
     assert client.get("/healthz").status_code == 200
     ready = client.get("/readyz")
     assert ready.status_code == 200
-    assert ready.json() == {"ready": True, "packs_loaded": 5, "pack_load_error_count": 0, "self_test": True,
-                            "database": "ok", "redis": "not_configured"}
+    body = ready.json()
+    assert body.pop("packs_loaded") >= 5            # the 5 seeded packs, plus whatever other test files published
+    assert body == {"ready": True, "pack_load_error_count": 0, "self_test": True, "database": "ok",
+                    "redis": "not_configured"}
     assert "hotel_001" not in ready.text
 
 

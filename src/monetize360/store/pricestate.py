@@ -28,7 +28,7 @@ def lock_and_read(conn: psycopg.Connection, tenant_id: str, domain: str, entity:
     """Take this entity's lock (until commit) and return its state row, if any."""
     conn.execute(_LOCK, (f"state:{tenant_id}:{domain}:{entity}",))
     return conn.execute(
-        "SELECT anchor_price, anchor_time, last_price, last_time FROM price_state "
+        "SELECT anchor_price, anchor_time, last_price, last_time, last_price_id FROM price_state "
         "WHERE domain = %s AND entity = %s", (domain, entity)).fetchone()
 
 
@@ -42,10 +42,12 @@ def anchor_for(state: dict | None, as_of: datetime, per: timedelta | None) -> An
 
 
 def save(conn: psycopg.Connection, tenant_id: str, domain: str, entity: str, price: Decimal, as_of: datetime,
-         anchor: Anchor) -> None:
+         anchor: Anchor, price_id: str | None = None) -> None:
     conn.execute(
-        "INSERT INTO price_state (tenant_id, domain, entity, anchor_price, anchor_time, last_price, last_time) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+        "INSERT INTO price_state (tenant_id, domain, entity, anchor_price, anchor_time, last_price, last_time, "
+        "last_price_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
         "ON CONFLICT (tenant_id, domain, entity) DO UPDATE SET anchor_price = EXCLUDED.anchor_price, "
-        "anchor_time = EXCLUDED.anchor_time, last_price = EXCLUDED.last_price, last_time = EXCLUDED.last_time",
-        (tenant_id, domain, entity, anchor.price if anchor.price is not None else price, anchor.time, price, as_of))
+        "anchor_time = EXCLUDED.anchor_time, last_price = EXCLUDED.last_price, last_time = EXCLUDED.last_time, "
+        "last_price_id = EXCLUDED.last_price_id",
+        (tenant_id, domain, entity, anchor.price if anchor.price is not None else price, anchor.time, price, as_of,
+         price_id))

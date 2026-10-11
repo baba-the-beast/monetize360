@@ -1,21 +1,26 @@
 """POST /v1/admin/kill, /v1/admin/keys, /v1/admin/keys/{id}/revoke.
 
-Built so far: the API-key endpoints (create, list, revoke). Kill switch and tenant policy arrive with M7.
-All need an `admin` key and act only on the caller's own tenant."""
+API keys (create, list, revoke), the tenant's limits (GET/PUT /v1/admin/policy) and the kill switch
+(POST /v1/admin/kill). All need an `admin` key and act only on the caller's own tenant."""
 from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from monetize360.api.deps import require_principal
-from monetize360.api.errors import ApiError
+from monetize360.api.errors import ApiError, jsonable, pack_not_found
+from monetize360.api.schemas import Money
+from monetize360.control import publisher
+from monetize360.control.linter import lint
+from monetize360.engine import Policy
 from monetize360.security import keys as keylib
 from monetize360.security.principal import ALL_DOMAINS, Principal
-from monetize360.store import api_keys
+from monetize360.store import api_keys, controls
 from monetize360.store.db import Database
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
@@ -125,3 +130,119 @@ def revoke_key(key_id: str, request: Request, principal: Principal = Depends(adm
     broadcast = events.publish("key_revoked", key_id=key_id) if events is not None else False
     return {"key_id": key_id, "revoked_at": revoked_at.astimezone(timezone.utc).isoformat(),
             "broadcast": broadcast}
+
+
+# ---------------------------------------------------------------- tenant limits
+
+_SIGNAL = re.compile(r"[a-z][a-z0-9_]{0,39}")
+MAX_MONEY = Decimal(10) ** 12
+
+
+class PolicyUpdate(BaseModel):
+    """The whole policy: a field left out is cleared (PUT replaces)."""
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [
+        {"max_surge_x": "2.0", "banned_signals": ["customer_gender"]}]})
+
+    min_price: Money | None = Field(default=None, description="No price below this, in any domain")
+    max_price: Money | None = Field(default=None, description="No price above this, in any domain")
+    max_surge_x: Money | None = Field(default=None, description="No price above this many times its base price")
+    banned_signals: list[str] = Field(default_factory=list, max_length=100)
+    require_two_person: bool = True
+
+    @field_validator("banned_signals")
+    @classmethod
+    def _signals(cls, v: list[str]) -> list[str]:
+        for name in v:
+            if not _SIGNAL.fullmatch(name):
+                raise ValueError(f"'{name}' is not a signal name")
+        return sorted(set(v))
+
+
+def _check_policy(body: PolicyUpdate) -> Policy | None:
+    def bad(path: str, why: str) -> ApiError:
+        return ApiError(400, "bad_request", why, [{"path": path}])
+
+    if not body.require_two_person:
+        raise bad("require_two_person", "two-person approval cannot be switched off: the database enforces it")
+    for name in ("min_price", "max_price"):
+        value = getattr(body, name)
+        if value is not None and not Decimal(0) < value <= MAX_MONEY:
+            raise bad(name, f"{name} must be greater than 0 and at most {MAX_MONEY}")
+    if body.max_surge_x is not None and not Decimal(0) < body.max_surge_x <= 1000:
+        raise bad("max_surge_x", "max_surge_x must be greater than 0 and at most 1000")
+    if body.min_price is not None and body.max_price is not None and body.min_price > body.max_price:
+        raise bad("min_price", "min_price is above max_price")
+    limits = {k: v for k in ("min_price", "max_price", "max_surge_x") if (v := getattr(body, k)) is not None}
+    return Policy(**limits) if limits else None
+
+
+def _policy_view(db: Database, tenant_id: str) -> dict[str, Any]:
+    state = controls.get_policy(db, tenant_id)
+    row = state["policy"] or {}
+    return {
+        "min_price": jsonable(row.get("min_price")), "max_price": jsonable(row.get("max_price")),
+        "max_surge_x": jsonable(row.get("max_surge_x")), "banned_signals": list(row.get("banned_signals") or []),
+        "require_two_person": True,
+        "updated_by": row.get("updated_by"),
+        "updated_at": row["updated_at"].astimezone(timezone.utc).isoformat() if row.get("updated_at") else None,
+        "kill_switches": [{"domain": k["domain"], "mode": k["mode"], "set_by": k["set_by"],
+                           "set_at": k["set_at"].astimezone(timezone.utc).isoformat()}
+                          for k in state["kill_switches"]],
+    }
+
+
+def _changed(request: Request) -> bool:
+    """This replica applies the change now; the others are told, or find out by their poll."""
+    request.app.state.refresh_controls()
+    events = request.app.state.events
+    return events.publish("controls_changed") if events is not None else False
+
+
+@router.get("/policy")
+def get_policy(request: Request, principal: Principal = Depends(admin_key)) -> dict[str, Any]:   # noqa: B008
+    """Your tenant's limits and any kill switch that is on."""
+    return _policy_view(_db(request), principal.tenant_id)
+
+
+@router.put("/policy")
+def put_policy(body: PolicyUpdate, request: Request,
+               principal: Principal = Depends(admin_key)) -> dict[str, Any]:   # noqa: B008
+    """Replace your tenant's limits. They apply to every price in every domain at once, on top of each pack's own
+    guards (the strictest wins). Refused if they contradict a pack that is live."""
+    db = _db(request)
+    policy = _check_policy(body)
+    conflicts = []
+    for domain, text in controls.live_pack_texts(db, principal.tenant_id):
+        pack, _ = publisher.parse(text, domain)
+        report = lint(pack, policy=policy, banned_signals=body.banned_signals, as_of=datetime.now(timezone.utc))
+        conflicts += [{"path": f"{domain}/{e['path']}", "message": e["message"]} for e in report["errors"]
+                      if e["code"] in ("tenant_limit", "banned_signal")]
+    if conflicts:
+        raise ApiError(409, "policy_conflict", "these limits contradict rules that are live; "
+                                               "change the pack first, or choose other limits", conflicts)
+    controls.set_policy(db, principal.tenant_id, min_price=body.min_price, max_price=body.max_price,
+                        max_surge_x=body.max_surge_x, banned_signals=body.banned_signals,
+                        updated_by=principal.key_id)
+    broadcast = _changed(request)
+    return {**_policy_view(db, principal.tenant_id), "broadcast": broadcast}
+
+
+# ---------------------------------------------------------------- kill switch
+
+class KillRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{"domain": "hotel", "mode": "freeze"}]})
+    domain: str = Field(min_length=1, max_length=40)
+    mode: Literal["normal", "freeze", "base_only"]
+
+
+@router.post("/kill")
+def kill_switch(body: KillRequest, request: Request,
+                principal: Principal = Depends(admin_key)) -> dict[str, Any]:   # noqa: B008
+    """Stop dynamic pricing for one domain, at once, on every server.
+    `freeze`: each thing keeps the last price it was given (503 if it never had one).
+    `base_only`: rules are off; base price, guards and rounding still apply. `normal`: back to the live rules."""
+    db = _db(request)
+    if not principal.allows(body.domain) or request.app.state.packs.get(principal.tenant_id, body.domain) is None:
+        raise pack_not_found(body.domain)
+    previous = controls.set_kill(db, principal.tenant_id, body.domain, body.mode, principal.key_id)
+    return {"domain": body.domain, "mode": body.mode, "previous_mode": previous, "broadcast": _changed(request)}

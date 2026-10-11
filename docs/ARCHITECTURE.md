@@ -525,6 +525,32 @@ Use case: "something looks wrong at 2 AM" → one call, every replica obeys in u
 
 ---
 
+### 9.1 As built: limits and the kill switch on live prices
+
+Both are kept **in each replica's memory** (`store/controls.py`) and refreshed from Postgres at startup, on a
+`controls_changed` broadcast, and by the 10 s poll. So a price request never looks them up, and they keep
+working if Postgres is down.
+
+- **Tenant limits** (`PUT /v1/admin/policy`): min price, max price, max surge × base. They are the engine's
+  second guard layer, so a clamp appears in the waterfall like any other (`tenant_surge -300.00`). The limits in
+  force are written into each audit row; replay uses those, not today's, so an old price still reproduces after
+  the limits change. A policy that contradicts a live pack is refused (`409 policy_conflict`) instead of
+  breaking every price in that domain.
+- **Kill switch** (`POST /v1/admin/kill`), per domain:
+  - `base_only` — the engine runs with every rule disabled: base price, guards and rounding only.
+  - `freeze` — the engine does not run. Each entity gets its last issued price again (from `price_state`);
+    one that was never priced gets `503 killed`. The audit row records the mode and which earlier price it
+    repeated, and replay reports "nothing was calculated" instead of pretending to recompute it.
+  - `normal` — back to the live rules; the `max_change` guard carries on from the last price.
+- Measured on the running server: setting the switch took 222 ms (the Redis round trip) and the very next
+  price obeyed it; `/price` latency with both checks is p50 8.4 ms. A second server obeys by poll within its
+  interval, a server started later already knows the switch is on, and with Postgres down `base_only` and the
+  limits still hold while `freeze` answers `503 killed` (the last price can't be read).
+- Only an `admin` key of that tenant; one tenant's switch and limits never touch another's (tested).
+
+Not built: "emergency mode" surge caps set by the platform operator across all tenants (layer 3 beyond the
+0.01 minimum).
+
 ## 10. Scaling — peaks and quiet hours
 
 ### 10.1 Why it scales

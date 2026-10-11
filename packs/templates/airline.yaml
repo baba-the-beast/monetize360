@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=../schema/pack.schema.json
+domain: airline
+currency: INR
+description: Domestic economy/business fares using fare buckets, like real airline revenue management
+
+signals:
+  seats_sold:        { type: ratio, range: [0, 1], source: request }
+  days_to_departure: { type: int, range: [0, 365], source: request }
+  cabin:             { type: enum, values: [economy, business], source: request, default: economy }
+
+base:
+  op: band                       # fare buckets: cheapest sells first
+  signal: seats_sold
+  bands:
+    - { upto: 0.20, price: 3500 }   # bucket Q
+    - { upto: 0.50, price: 4800 }   # bucket M
+    - { upto: 0.80, price: 6200 }   # bucket H
+    - { upto: 1.00, price: 9000 }   # bucket Y
+
+groups:
+  - name: timing
+    stacking: multiply
+    rules:
+      - id: days-to-departure
+        when: "true"
+        then:
+          op: piecewise_curve
+          signal: days_to_departure
+          points: [[0, 1.6], [7, 1.3], [21, 1.0], [60, 0.9]]
+        reason: "{days_to_departure} days before departure"
+      - id: cabin
+        when: "true"
+        then: { op: lookup_table, signal: cabin, table: { economy: 1.0, business: 2.8 } }
+        reason: "{cabin} cabin"
+
+guards:
+  floor:   { op: abs, value: 2500 }
+  ceiling: { op: abs, value: 45000 }
+  max_change: { pct: 25, per: 1h }
+
+rounding: { step: 1, mode: half_up, ending: 99 }

@@ -1,0 +1,485 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://monetize360.dev/schema/pack.schema.json",
+  "title": "Monetize360 Domain Pack",
+  "description": "One pricing recipe for one domain. Gate 1 of 3 (schema -> linter -> fuzz verify). Shape only: meaning (floor <= ceiling, signals exist, CEL type-checks) is checked by the linter.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["domain", "currency", "signals", "base", "groups", "guards", "rounding"],
+  "properties": {
+    "domain": {
+      "description": "Domain name used in the URL: POST /v1/price/{domain}.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{1,39}$"
+    },
+    "version": {
+      "description": "Set by the system on save. Do not write by hand.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "currency": {
+      "description": "ISO 4217 code, e.g. INR.",
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "description": { "type": "string", "maxLength": 500 },
+    "timezone": {
+      "description": "IANA timezone for public signals (weekend, hour, festival). Default Asia/Kolkata.",
+      "type": "string",
+      "default": "Asia/Kolkata",
+      "pattern": "^[A-Za-z]+(/[A-Za-z_+-]+){0,2}$"
+    },
+
+    "signals": {
+      "description": "Inputs this domain understands. Name -> spec.",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 100,
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": { "$ref": "#/$defs/signal" }
+    },
+
+    "base": { "$ref": "#/$defs/base" },
+
+    "groups": {
+      "description": "Rule groups, evaluated top to bottom.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/group" }
+    },
+
+    "guards": { "$ref": "#/$defs/guards" },
+    "rounding": { "$ref": "#/$defs/rounding" }
+  },
+
+  "$defs": {
+    "identifier": {
+      "description": "snake_case name, usable in CEL expressions.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,39}$"
+    },
+    "rule_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,49}$"
+    },
+    "duration": {
+      "description": "e.g. 30s, 15m, 1h, 1d",
+      "type": "string",
+      "pattern": "^[1-9][0-9]*(s|m|h|d)$"
+    },
+    "number": {
+      "description": "Numbers are converted with Decimal(str(x)) by the compiler - never used as floats.",
+      "type": "number"
+    },
+    "positive": { "type": "number", "exclusiveMinimum": 0 },
+    "cel": {
+      "description": "CEL expression over signal names, e.g. \"occupancy > 0.8 && is_weekend\".",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "source"],
+      "properties": {
+        "type": {
+          "description": "ratio = 0..1, money = amount in pack currency.",
+          "enum": ["ratio", "number", "money", "int", "bool", "enum"]
+        },
+        "source": {
+          "description": "request = sent by caller; redis = pushed by a feed; public = derived from date (weekday, festival).",
+          "enum": ["request", "redis", "public"]
+        },
+        "description": { "type": "string", "maxLength": 200 },
+        "default": { "description": "Used when missing or stale. null = no default (request rejected if missing)." },
+        "range": {
+          "description": "[min, max] inclusive. Out-of-range inputs are rejected.",
+          "type": "array",
+          "prefixItems": [{ "type": "number" }, { "type": "number" }],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "values": {
+          "description": "Allowed values for type: enum.",
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        },
+        "max_staleness": { "$ref": "#/$defs/duration" },
+        "on_stale": {
+          "enum": ["use_default", "use_last_known", "reject"],
+          "default": "use_default"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "enum" } } },
+          "then": { "required": ["values"] },
+          "else": { "not": { "required": ["values"] } }
+        },
+        {
+          "if": { "properties": { "source": { "const": "redis" } } },
+          "then": { "required": ["max_staleness"] },
+          "else": { "not": { "anyOf": [{ "required": ["max_staleness"] }, { "required": ["on_stale"] }] } }
+        },
+        {
+          "if": { "properties": { "type": { "enum": ["bool", "enum"] } } },
+          "then": { "not": { "required": ["range"] } }
+        }
+      ]
+    },
+
+    "base": {
+      "description": "Where the starting price comes from.",
+      "type": "object",
+      "required": ["op"],
+      "properties": {
+        "op": { "enum": ["from_request", "set", "band", "lookup_table", "cost_plus", "competitor_rel"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "op": { "const": "from_request" } } },
+          "then": {
+            "description": "Caller sends base_price (we keep no catalog).",
+            "additionalProperties": false,
+            "properties": { "op": true }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "set" } } },
+          "then": {
+            "additionalProperties": false,
+            "required": ["price"],
+            "properties": { "op": true, "price": { "$ref": "#/$defs/positive" } }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "band" } } },
+          "then": {
+            "description": "Price by range of a signal, e.g. airline fare buckets by seats_sold.",
+            "additionalProperties": false,
+            "required": ["signal", "bands"],
+            "properties": {
+              "op": true,
+              "signal": { "$ref": "#/$defs/identifier" },
+              "bands": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["upto", "price"],
+                  "properties": { "upto": { "$ref": "#/$defs/number" }, "price": { "$ref": "#/$defs/positive" } }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "lookup_table" } } },
+          "then": { "$ref": "#/$defs/lookup_body", "properties": { "op": true } }
+        },
+        {
+          "if": { "properties": { "op": { "const": "cost_plus" } } },
+          "then": {
+            "description": "price = cost_signal * (1 + margin_pct/100)",
+            "additionalProperties": false,
+            "required": ["cost_signal", "margin_pct"],
+            "properties": {
+              "op": true,
+              "cost_signal": { "$ref": "#/$defs/identifier" },
+              "margin_pct": { "type": "number", "minimum": -100, "maximum": 1000 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "competitor_rel" } } },
+          "then": {
+            "description": "price = competitor_signal * (1 + pct/100). pct -5 = undercut 5%.",
+            "additionalProperties": false,
+            "required": ["competitor_signal", "pct"],
+            "properties": {
+              "op": true,
+              "competitor_signal": { "$ref": "#/$defs/identifier" },
+              "pct": { "type": "number", "minimum": -100, "maximum": 1000 }
+            }
+          }
+        }
+      ]
+    },
+
+    "lookup_body": {
+      "description": "Single key: signal + table {key: value}. Multi-dimensional: signals [a, b] + rows [{key: [x, y], value}].",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "op": true,
+        "signal": { "$ref": "#/$defs/identifier" },
+        "table": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1000,
+          "additionalProperties": { "$ref": "#/$defs/number" }
+        },
+        "signals": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        },
+        "rows": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "value"],
+            "properties": {
+              "key": { "type": "array", "minItems": 2, "maxItems": 5, "items": { "type": ["string", "number", "boolean"] } },
+              "value": { "$ref": "#/$defs/number" }
+            }
+          }
+        },
+        "default": { "$ref": "#/$defs/number" }
+      },
+      "oneOf": [
+        { "required": ["signal", "table"], "not": { "anyOf": [{ "required": ["signals"] }, { "required": ["rows"] }] } },
+        { "required": ["signals", "rows"], "not": { "anyOf": [{ "required": ["signal"] }, { "required": ["table"] }] } }
+      ]
+    },
+
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "stacking", "rules"],
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "stacking": {
+          "description": "multiply = compound; add = sum percentages; max = biggest wins; first_match = first firing rule only; exclusive = at most one may fire (linter + runtime error otherwise).",
+          "enum": ["multiply", "add", "max", "first_match", "exclusive"]
+        },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200,
+          "items": { "$ref": "#/$defs/rule" }
+        }
+      }
+    },
+
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "when", "then", "reason"],
+      "properties": {
+        "id": { "$ref": "#/$defs/rule_id" },
+        "when": { "$ref": "#/$defs/cel" },
+        "then": { "$ref": "#/$defs/adjustment" },
+        "reason": {
+          "description": "Shown in the waterfall. {signal_name} placeholders are filled in.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "priority": {
+          "description": "Higher runs first within the group; equal priorities run in file order.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000,
+          "default": 0
+        },
+        "effective_from": { "type": "string", "format": "date-time" },
+        "effective_to": { "type": "string", "format": "date-time" },
+        "owner": { "type": "string", "maxLength": 100 }
+      }
+    },
+
+    "adjustment": {
+      "description": "What a rule does when it fires. Result is a percentage (pct), an amount (abs, set) or a factor (multiplier, lookup_table, band, piecewise_curve).",
+      "type": "object",
+      "required": ["op"],
+      "properties": {
+        "op": { "enum": ["pct", "abs", "multiplier", "set", "lookup_table", "band", "piecewise_curve", "tier", "formula"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "op": { "const": "pct" } } },
+          "then": {
+            "description": "+20 = +20%, -10 = 10% off.",
+            "additionalProperties": false,
+            "required": ["value"],
+            "properties": { "op": true, "value": { "type": "number", "minimum": -100, "maximum": 1000 } }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "abs" } } },
+          "then": {
+            "description": "Fixed amount in pack currency, + or -.",
+            "additionalProperties": false,
+            "required": ["value"],
+            "properties": { "op": true, "value": { "$ref": "#/$defs/number" } }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "multiplier" } } },
+          "then": {
+            "additionalProperties": false,
+            "required": ["value"],
+            "properties": { "op": true, "value": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 } }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "set" } } },
+          "then": {
+            "description": "Override the running price.",
+            "additionalProperties": false,
+            "required": ["value"],
+            "properties": { "op": true, "value": { "$ref": "#/$defs/positive" } }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "lookup_table" } } },
+          "then": { "$ref": "#/$defs/lookup_body" }
+        },
+        {
+          "if": { "properties": { "op": { "const": "band" } } },
+          "then": {
+            "additionalProperties": false,
+            "required": ["signal", "bands"],
+            "properties": {
+              "op": true,
+              "signal": { "$ref": "#/$defs/identifier" },
+              "bands": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["upto", "factor"],
+                  "properties": { "upto": { "$ref": "#/$defs/number" }, "factor": { "$ref": "#/$defs/positive" } }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "piecewise_curve" } } },
+          "then": {
+            "description": "Linear interpolation between [x, factor] points; clamps at the ends.",
+            "additionalProperties": false,
+            "required": ["signal", "points"],
+            "properties": {
+              "op": true,
+              "signal": { "$ref": "#/$defs/identifier" },
+              "points": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 100,
+                "items": {
+                  "type": "array",
+                  "prefixItems": [{ "type": "number" }, { "type": "number", "exclusiveMinimum": 0 }],
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "tier" } } },
+          "then": {
+            "description": "Quantity tiers: the highest tier whose 'from' <= signal applies its pct.",
+            "additionalProperties": false,
+            "required": ["signal", "tiers"],
+            "properties": {
+              "op": true,
+              "signal": { "$ref": "#/$defs/identifier" },
+              "tiers": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 50,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["from", "pct"],
+                  "properties": {
+                    "from": { "type": "number", "minimum": 0 },
+                    "pct": { "type": "number", "minimum": -100, "maximum": 1000 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "op": { "const": "formula" } } },
+          "then": {
+            "description": "CEL arithmetic returning the new price; may use `price` and signals. The linter type-checks it; /verify (fuzz) checks its bounds.",
+            "additionalProperties": false,
+            "required": ["expr"],
+            "properties": { "op": true, "expr": { "$ref": "#/$defs/cel" } }
+          }
+        }
+      ]
+    },
+
+    "limit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "value"],
+      "properties": {
+        "op": { "description": "abs = fixed amount; pct_of_base = % of the base price.", "enum": ["abs", "pct_of_base"] },
+        "value": { "$ref": "#/$defs/positive" }
+      }
+    },
+
+    "guards": {
+      "description": "Layer 1 guardrails. Floor and ceiling are mandatory: no pack may produce an unbounded price.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["floor", "ceiling"],
+      "properties": {
+        "floor": { "$ref": "#/$defs/limit" },
+        "ceiling": { "$ref": "#/$defs/limit" },
+        "max_change": {
+          "description": "Max move vs the entity's previous price within the window.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pct", "per"],
+          "properties": {
+            "pct": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+            "per": { "$ref": "#/$defs/duration" }
+          }
+        }
+      }
+    },
+
+    "rounding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step", "mode"],
+      "properties": {
+        "step": { "description": "Round to a multiple of this, e.g. 50 or 0.01.", "$ref": "#/$defs/positive" },
+        "mode": {
+          "description": "half_up: 4125 -> 4150 at step 50. Never banker's rounding.",
+          "enum": ["half_up", "down", "up"]
+        },
+        "ending": {
+          "description": "Force the last two digits, e.g. 99 -> 6199. Applied after step rounding, then re-checked against guards.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 99
+        }
+      }
+    }
+  }
+}

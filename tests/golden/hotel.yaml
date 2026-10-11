@@ -1,0 +1,48 @@
+# Golden cases: HAND-CALCULATED by a human before the engine exists (ARCHITECTURE §8.3).
+# Never change an expected value to make a test pass without recalculating it by hand.
+# Seeded with the worked examples from ARCHITECTURE §8.1. Target: 15+ cases per domain.
+# Semantics: docs/ENGINE_SPEC.md. Inputs: base_price, reference_price, as_of are context fields;
+# every other key is a signal (public signals allowed here, as in /simulate).
+# expect_waterfall lists only rows with a NON-ZERO delta (a fired rule with zero effect still
+# emits a row per the spec; the runner ignores zero rows).
+# Still to write by hand: rounding that would cross the ceiling, max_change clamp up and down,
+# floor clamp, missing occupancy -> default 0.5 + flag, occupancy 7 -> SignalInvalid.
+pack: packs/templates/hotel.yaml
+
+cases:
+  - name: all three rules compound
+    inputs: { base_price: "3000", occupancy: "0.85", is_weekend: true, festival: diwali, reference_price: "4500" }
+    expect_price: "4950.00"
+    expect_waterfall:
+      - { step: base,     delta: "3000.00", after: "3000.00" }
+      - { step: high-occ, delta: "600.00",  after: "3600.00" }
+      - { step: weekend,  delta: "360.00",  after: "3960.00" }
+      - { step: festival, delta: "990.00",  after: "4950.00" }
+
+  - name: no festival, rounds 3960 down to 3950
+    inputs: { base_price: "3000", occupancy: "0.85", is_weekend: true, festival: none, reference_price: "3900" }
+    expect_price: "3950.00"
+    expect_waterfall:
+      - { step: base,     delta: "3000.00", after: "3000.00" }
+      - { step: high-occ, delta: "600.00",  after: "3600.00" }
+      - { step: weekend,  delta: "360.00",  after: "3960.00" }
+      - { step: rounding, delta: "-10.00",  after: "3950.00" }
+
+  - name: exact rounding tie 4125 goes UP to 4150 (half_up, not banker's)
+    inputs: { base_price: "3000", occupancy: "0.80", is_weekend: true, festival: diwali, reference_price: "4000" }
+    expect_price: "4150.00"
+    expect_waterfall:
+      - { step: base,     delta: "3000.00", after: "3000.00" }
+      - { step: weekend,  delta: "300.00",  after: "3300.00" }
+      - { step: festival, delta: "825.00",  after: "4125.00" }
+      - { step: rounding, delta: "25.00",   after: "4150.00" }
+
+  - name: ceiling clamps (base 3500 -> 5775 -> capped 5000)
+    inputs: { base_price: "3500", occupancy: "0.95", is_weekend: true, festival: holi, reference_price: "5000" }
+    expect_price: "5000.00"
+    expect_waterfall:
+      - { step: base,     delta: "3500.00", after: "3500.00" }
+      - { step: high-occ, delta: "700.00",  after: "4200.00" }
+      - { step: weekend,  delta: "420.00",  after: "4620.00" }
+      - { step: festival, delta: "1155.00", after: "5775.00" }
+      - { step: ceiling,  delta: "-775.00", after: "5000.00" }
